@@ -32,6 +32,9 @@ pip install -r requirements.txt
 
 - 輸入：`data/input/`
 - 輸出：`data/output/`
+- 每次執行會自動建立：`data/output/runs/YYYYMMDD_HHMMSS/`
+- 最新 run 指標：`data/output/latest_run.txt`
+- 根目錄保留最新摘要：`data/output/summary_latest.txt`、`data/output/summary_latest.md`
 
 範例測試圖：`data/input/sample.jpg`
 
@@ -61,8 +64,35 @@ python main.py
 python main.py --model unidepth_v2
 ```
 
+> `main.py` 若不指定 `--out-path`、`--csv-path`，會自動寫到本次 run 資料夾。
+
 ## 6) 已知提示（非致命）
 
 - `xFormers not available`：可跑，但可能較慢
 - `EdgeGuidedLocalSSI ... slowdown`：UniDepth 可跑，但未編譯加速算子時較慢
 - `KNN ... compile.sh`：主要影響評估，不影響一般推論
+
+## 7) 雙模型比較與報告輸出
+
+### A. 一鍵跑 DA2 + UD2 並合併 CSV
+
+```bash
+python compare_models.py --img-path data/input --bbox 800,500,1200,900 --out-dir data/output/compare --merged-csv data/output/compare/merged_compare.csv
+```
+
+會產生：
+- `data/output/compare/depth_stats_da2.csv`
+- `data/output/compare/depth_stats_ud2.csv`
+- `data/output/compare/merged_compare.csv`
+- `data/output/compare/da2/*.png`
+- `data/output/compare/ud2/*.png`
+
+### B. 產生摘要報告（txt + markdown）
+
+```bash
+python summarize_compare.py --merged-csv data/output/compare/merged_compare.csv --report-path data/output/compare/summary_report.txt --markdown-path data/output/compare/summary_report.md
+```
+
+會產生：
+- `data/output/compare/summary_report.txt`
+- `data/output/compare/summary_report.md`
