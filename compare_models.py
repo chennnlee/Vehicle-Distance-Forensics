@@ -7,6 +7,13 @@ from datetime import datetime
 from pathlib import Path
 
 
+def to_float_or_nan(value: str) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float("nan")
+
+
 def run_main(project_root: Path, args_list: list[str]) -> None:
     command = [sys.executable, "main.py", *args_list]
     subprocess.run(command, cwd=project_root, check=True)
@@ -63,6 +70,7 @@ def main() -> None:
     parser.add_argument("--scale-factor", type=float, default=1.0)
     parser.add_argument("--anchor-pred", type=str, default="")
     parser.add_argument("--anchor-gt", type=str, default="")
+    parser.add_argument("--auto-scale-gt", type=float, default=None, help="參考物真值距離(公尺)，搭配 --bbox 自動校正")
     parser.add_argument("--run-name", type=str, default="", help="run 資料夾名稱；留空自動時間戳")
     parser.add_argument("--keep-runs", type=int, default=10, help="最多保留最近 N 個 run")
     parser.add_argument("--out-dir", type=str, default="", help="比較輸出目錄；留空時使用本次 run/compare")
@@ -98,6 +106,9 @@ def main() -> None:
         "--anchor-gt",
         args.anchor_gt,
     ]
+
+    if args.auto_scale_gt is not None:
+        common.extend(["--auto-scale-gt", str(args.auto_scale_gt)])
 
     run_main(
         project_root,
@@ -173,6 +184,16 @@ def main() -> None:
         da_roi = da["roi_median"]
         ud_roi = ud["roi_median"]
         m3_roi = m3["roi_median"]
+        da_bev_center = da.get("bev_center_distance_m", "")
+        ud_bev_center = ud.get("bev_center_distance_m", "")
+        m3_bev_center = m3.get("bev_center_distance_m", "")
+        da_bev_roi = da.get("bev_roi_median_distance_m", "")
+        ud_bev_roi = ud.get("bev_roi_median_distance_m", "")
+        m3_bev_roi = m3.get("bev_roi_median_distance_m", "")
+
+        da_bev_center_f = to_float_or_nan(da_bev_center)
+        ud_bev_center_f = to_float_or_nan(ud_bev_center)
+        m3_bev_center_f = to_float_or_nan(m3_bev_center)
 
         merged_rows.append(
             {
@@ -187,9 +208,21 @@ def main() -> None:
                 "da_roi_median": da_roi,
                 "ud_roi_median": ud_roi,
                 "m3_roi_median": m3_roi,
+                "da_bev_center_distance_m": da_bev_center,
+                "ud_bev_center_distance_m": ud_bev_center,
+                "m3_bev_center_distance_m": m3_bev_center,
+                "da_bev_roi_median_distance_m": da_bev_roi,
+                "ud_bev_roi_median_distance_m": ud_bev_roi,
+                "m3_bev_roi_median_distance_m": m3_bev_roi,
+                "da_ud_bev_abs_diff": f"{abs(da_bev_center_f - ud_bev_center_f):.6f}",
+                "da_m3_bev_abs_diff": f"{abs(da_bev_center_f - m3_bev_center_f):.6f}",
+                "ud_m3_bev_abs_diff": f"{abs(ud_bev_center_f - m3_bev_center_f):.6f}",
                 "da_output": da["output"],
                 "ud_output": ud["output"],
                 "m3_output": m3["output"],
+                "da_bev_output": da.get("bev_output", ""),
+                "ud_bev_output": ud.get("bev_output", ""),
+                "m3_bev_output": m3.get("bev_output", ""),
             }
         )
 
@@ -212,9 +245,21 @@ def main() -> None:
         "da_roi_median",
         "ud_roi_median",
         "m3_roi_median",
+        "da_bev_center_distance_m",
+        "ud_bev_center_distance_m",
+        "m3_bev_center_distance_m",
+        "da_bev_roi_median_distance_m",
+        "ud_bev_roi_median_distance_m",
+        "m3_bev_roi_median_distance_m",
+        "da_ud_bev_abs_diff",
+        "da_m3_bev_abs_diff",
+        "ud_m3_bev_abs_diff",
         "da_output",
         "ud_output",
         "m3_output",
+        "da_bev_output",
+        "ud_bev_output",
+        "m3_bev_output",
     ]
     write_csv_rows(merged_csv, merged_rows, fieldnames)
 
@@ -228,10 +273,6 @@ def main() -> None:
     latest_file = project_root / "data" / "output" / "latest_run.txt"
     latest_file.parent.mkdir(parents=True, exist_ok=True)
     latest_file.write_text(str(run_dir), encoding="utf-8")
-
-    latest_summary = project_root / "data" / "output" / "summary_latest.csv"
-    latest_summary.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(merged_csv, latest_summary)
 
     prune_old_runs(project_root, args.keep_runs)
 

@@ -1,2 +1,0 @@
-image,model,scale_factor,center_x,center_y,center_depth,roi_median,roi_mean,roi_min,roi_max,output
-/home/s11244/code/114/Vehicle-Distance-Forensics/data/input/sample.jpg,depth_anything_v2,1.0,1024,681,0.5195634961128235,0.5409250259399414,0.4728805124759674,0.0,1.0060081481933594,/home/s11244/code/114/Vehicle-Distance-Forensics/data/output/runs/20260309_204033/compare/da2/sample_depth.png

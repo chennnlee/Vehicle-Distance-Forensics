@@ -10,7 +10,7 @@ import numpy as np
 from core.calibration import apply_scale, compute_scale_factor
 from core.depth_engine import DepthEngine
 from core.geometry import CameraIntrinsics, depth_to_point_cloud, to_bev
-from utils.visualizer import save_depth_colormap
+from utils.visualizer import save_bev_scatter, save_depth_colormap
 
 
 def parse_bbox(bbox_text: str) -> tuple[int, int, int, int]:
@@ -26,6 +26,17 @@ def parse_float_list(text: str) -> np.ndarray:
     if not parts:
         raise ValueError("清單不可為空")
     return np.asarray([float(v) for v in parts], dtype=np.float32)
+
+
+def clamp_bbox(bbox: tuple[int, int, int, int], h: int, w: int) -> tuple[int, int, int, int]:
+    x1, y1, x2, y2 = bbox
+    x1 = max(0, min(x1, w - 1))
+    x2 = max(1, min(x2, w))
+    y1 = max(0, min(y1, h - 1))
+    y2 = max(1, min(y2, h))
+    if x2 <= x1 or y2 <= y1:
+        raise ValueError("--bbox 無效，需滿足 x2>x1 且 y2>y1")
+    return x1, y1, x2, y2
 
 
 def collect_images(image_path: Path) -> list[Path]:
@@ -93,6 +104,7 @@ def main() -> None:
     parser.add_argument("--scale-factor", type=float, default=1.0, help="固定尺度係數")
     parser.add_argument("--anchor-pred", type=str, default="", help="預測錨點距離清單，例: 0.52,0.81")
     parser.add_argument("--anchor-gt", type=str, default="", help="真實錨點距離清單，例: 5.0,8.0")
+    parser.add_argument("--auto-scale-gt", type=float, default=None, help="參考物真值距離(公尺)，搭配 --bbox 自動估計每張圖尺度")
     args = parser.parse_args()
 
     project_root = Path(__file__).resolve().parent
@@ -143,6 +155,9 @@ def main() -> None:
         anchor_gt = parse_float_list(args.anchor_gt)
         scale_factor = compute_scale_factor(anchor_pred, anchor_gt)
 
+    if args.auto_scale_gt is not None and not args.bbox:
+        raise ValueError("使用 --auto-scale-gt 時必須同時提供 --bbox")
+
     csv_rows: list[dict[str, str | float | int]] = []
     is_batch = image_path.is_dir()
 
@@ -153,7 +168,25 @@ def main() -> None:
             continue
 
         depth_raw = engine.infer(image)
-        depth = apply_scale(depth_raw, scale_factor=scale_factor)
+
+        sample_scale_factor = scale_factor
+        auto_scale_est = float("nan")
+        auto_scale_gt = float("nan")
+        auto_scale_enabled = False
+
+        if args.auto_scale_gt is not None:
+            h_raw, w_raw = depth_raw.shape
+            bbox_raw = parse_bbox(args.bbox)
+            x1_raw, y1_raw, x2_raw, y2_raw = clamp_bbox(bbox_raw, h_raw, w_raw)
+            ref_roi_raw = depth_raw[y1_raw:y2_raw, x1_raw:x2_raw]
+            auto_scale_est = float(np.median(ref_roi_raw))
+            if not np.isfinite(auto_scale_est) or auto_scale_est <= 0:
+                raise ValueError("參考框估測距離無效，無法自動校正尺度")
+            auto_scale_gt = float(args.auto_scale_gt)
+            sample_scale_factor = auto_scale_gt / auto_scale_est
+            auto_scale_enabled = True
+
+        depth = apply_scale(depth_raw, scale_factor=sample_scale_factor)
 
         center_y, center_x = depth.shape[0] // 2, depth.shape[1] // 2
         center_depth = float(depth[center_y, center_x])
@@ -164,14 +197,9 @@ def main() -> None:
         roi_max = np.nan
         bbox_stats_text = ""
         if args.bbox:
-            x1, y1, x2, y2 = parse_bbox(args.bbox)
             h, w = depth.shape
-            x1 = max(0, min(x1, w - 1))
-            x2 = max(1, min(x2, w))
-            y1 = max(0, min(y1, h - 1))
-            y2 = max(1, min(y2, h))
-            if x2 <= x1 or y2 <= y1:
-                raise ValueError("--bbox 無效，需滿足 x2>x1 且 y2>y1")
+            bbox = parse_bbox(args.bbox)
+            x1, y1, x2, y2 = clamp_bbox(bbox, h, w)
 
             roi_depth = depth[y1:y2, x1:x2]
             roi_median = float(np.median(roi_depth))
@@ -182,10 +210,21 @@ def main() -> None:
                 f"目標框: (x1={x1}, y1={y1}, x2={x2}, y2={y2})\n"
                 f"框內深度統計 median={roi_median:.6f}, mean={roi_mean:.6f}, min={roi_min:.6f}, max={roi_max:.6f}"
             )
+            if auto_scale_enabled:
+                bbox_stats_text += (
+                    f"\n自動尺度校正: gt={auto_scale_gt:.6f}, est_raw={auto_scale_est:.6f}, s={sample_scale_factor:.6f}"
+                )
 
         intrinsics = CameraIntrinsics(fx=1000.0, fy=1000.0, cx=image.shape[1] / 2, cy=image.shape[0] / 2)
         points_xyz = depth_to_point_cloud(depth, intrinsics)
-        _points_bev = to_bev(points_xyz)
+        points_bev = to_bev(points_xyz)
+        bev_grid = points_bev.reshape(depth.shape[0], depth.shape[1], 2)
+        bev_center_distance_m = float(bev_grid[center_y, center_x, 1])
+        bev_roi_median_distance_m = float("nan")
+        if args.bbox:
+            roi_bev = bev_grid[y1:y2, x1:x2, 1]
+            bev_roi_median_distance_m = float(np.median(roi_bev))
+            bbox_stats_text += f"\nBEV 前向距離中位數: {bev_roi_median_distance_m:.6f}"
 
         if is_batch:
             output_path = output_path_arg / f"{image_file.stem}_depth.png"
@@ -194,11 +233,17 @@ def main() -> None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         save_depth_colormap(depth, output_path)
 
+        if is_batch:
+            bev_output_path = output_path_arg / f"{image_file.stem}_bev.png"
+        else:
+            bev_output_path = run_dir / "bev.png"
+        save_bev_scatter(points_bev, bev_output_path)
+
         csv_rows.append(
             {
                 "image": str(image_file),
                 "model": args.model,
-                "scale_factor": float(scale_factor),
+                "scale_factor": float(sample_scale_factor),
                 "center_x": int(center_x),
                 "center_y": int(center_y),
                 "center_depth": center_depth,
@@ -206,17 +251,25 @@ def main() -> None:
                 "roi_mean": float(roi_mean),
                 "roi_min": float(roi_min),
                 "roi_max": float(roi_max),
+                "auto_scale_gt": auto_scale_gt,
+                "auto_scale_est_raw": auto_scale_est,
+                "auto_scale_enabled": int(auto_scale_enabled),
+                "bev_center_distance_m": bev_center_distance_m,
+                "bev_roi_median_distance_m": bev_roi_median_distance_m,
                 "output": str(output_path),
+                "bev_output": str(bev_output_path),
             }
         )
 
         print(f"影像: {image_file.name}")
         print(f"中心點座標: (x={center_x}, y={center_y})")
-        print(f"套用尺度係數: {scale_factor:.6f}")
+        print(f"套用尺度係數: {sample_scale_factor:.6f}")
         print(f"中心點深度值: {center_depth:.6f}")
+        print(f"BEV 中心前向距離: {bev_center_distance_m:.6f}")
         if bbox_stats_text:
             print(bbox_stats_text)
         print(f"完成推論，已輸出深度圖: {output_path}")
+        print(f"已輸出 BEV 圖: {bev_output_path}")
 
     with open(csv_path, "w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(
@@ -232,7 +285,13 @@ def main() -> None:
                 "roi_mean",
                 "roi_min",
                 "roi_max",
+                "auto_scale_gt",
+                "auto_scale_est_raw",
+                "auto_scale_enabled",
+                "bev_center_distance_m",
+                "bev_roi_median_distance_m",
                 "output",
+                "bev_output",
             ],
         )
         writer.writeheader()

@@ -36,7 +36,6 @@
 ## 4. 核心檔案
 - 主程式：main.py
 - 模型比較入口：compare_models.py
-- 比較摘要入口：summarize_compare.py
 - 模型整合：core/depth_engine.py
 - 尺度校正：core/calibration.py
 - 幾何轉換：core/geometry.py
@@ -48,9 +47,8 @@
 - 雙模型比較輸出：data/output/compare/
   - depth_stats_da2.csv
   - depth_stats_ud2.csv
+  - depth_stats_metric3d.csv
   - merged_compare.csv
-  - summary_report.txt
-  - summary_report.md
 
 ## 6. 已知現況與限制
 - 目前重點在深度估測與比較流程，尚未完成最終「車距公尺值」產品化介面
@@ -72,6 +70,3 @@
 
 - 雙模型比較：
   python compare_models.py --img-path data/input --bbox 800,500,1200,900 --out-dir data/output/compare --merged-csv data/output/compare/merged_compare.csv
-
-- 生成摘要報告：
-  python summarize_compare.py --merged-csv data/output/compare/merged_compare.csv --report-path data/output/compare/summary_report.txt --markdown-path data/output/compare/summary_report.md
