@@ -77,10 +77,11 @@ def prune_old_runs(project_root: Path, keep_runs: int) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Vehicle Distance Forensics MVP")
-    parser.add_argument("--model", type=str, default="depth_anything_v2", choices=["depth_anything_v2", "unidepth_v2"])
+    parser.add_argument("--model", type=str, default="depth_anything_v2", choices=["depth_anything_v2", "unidepth_v2", "metric3d"])
     parser.add_argument("--img-path", type=str, default="data/input/sample.jpg")
     parser.add_argument("--encoder", type=str, default="vits", choices=["vits", "vitb", "vitl", "vitg"])
     parser.add_argument("--unidepth-backbone", type=str, default="vits14", choices=["vits14", "vitb14", "vitl14"])
+    parser.add_argument("--metric3d-variant", type=str, default="vit_large", choices=["vit_small", "vit_large", "vit_giant2"])
     parser.add_argument("--input-size", type=int, default=518)
     parser.add_argument("--out-path", type=str, default="", help="輸出圖路徑；留空時自動放入本次 run 資料夾")
     parser.add_argument("--csv-path", type=str, default="", help="CSV 路徑；留空時自動放入本次 run 資料夾")
@@ -130,6 +131,7 @@ def main() -> None:
         args.model,
         encoder=args.encoder,
         unidepth_backbone=args.unidepth_backbone,
+        metric3d_variant=args.metric3d_variant,
         input_size=args.input_size,
     )
 

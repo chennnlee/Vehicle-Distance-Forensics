@@ -12,6 +12,12 @@ def to_float(row: dict[str, str], key: str) -> float:
         return float("nan")
 
 
+def pick_diff(row: dict[str, str]) -> float:
+    if "da_ud_abs_diff" in row:
+        return to_float(row, "da_ud_abs_diff")
+    return to_float(row, "center_depth_abs_diff")
+
+
 def get_latest_run_dir(project_root: Path) -> Path:
     latest_file = project_root / "data" / "output" / "latest_run.txt"
     if not latest_file.exists():
@@ -71,9 +77,11 @@ def main() -> None:
         print(f"Markdown 已輸出: {markdown_path}")
         return
 
-    abs_diffs = [to_float(row, "center_depth_abs_diff") for row in rows]
+    abs_diffs = [pick_diff(row) for row in rows]
     da_centers = [to_float(row, "da_center_depth") for row in rows]
     ud_centers = [to_float(row, "ud_center_depth") for row in rows]
+    has_m3 = "m3_center_depth" in rows[0]
+    m3_centers = [to_float(row, "m3_center_depth") for row in rows] if has_m3 else []
 
     mean_abs_diff = sum(abs_diffs) / len(abs_diffs)
     min_abs_diff = min(abs_diffs)
@@ -98,11 +106,29 @@ def main() -> None:
         "逐筆結果",
     ]
 
-    for idx, row in enumerate(rows, start=1):
-        lines.append(
-            f"{idx}. image={row['image']} | da_center={row['da_center_depth']} | "
-            f"ud_center={row['ud_center_depth']} | abs_diff={row['center_depth_abs_diff']}"
+    if has_m3:
+        da_m3 = [to_float(row, "da_m3_abs_diff") for row in rows]
+        ud_m3 = [to_float(row, "ud_m3_abs_diff") for row in rows]
+        lines.extend(
+            [
+                "",
+                f"DA2-M3 絕對差平均值: {sum(da_m3) / len(da_m3):.6f}",
+                f"UD2-M3 絕對差平均值: {sum(ud_m3) / len(ud_m3):.6f}",
+            ]
         )
+
+    for idx, row in enumerate(rows, start=1):
+        if has_m3:
+            lines.append(
+                f"{idx}. image={row['image']} | da_center={row['da_center_depth']} | "
+                f"ud_center={row['ud_center_depth']} | m3_center={row['m3_center_depth']} | "
+                f"da_ud={row['da_ud_abs_diff']} | da_m3={row['da_m3_abs_diff']} | ud_m3={row['ud_m3_abs_diff']}"
+            )
+        else:
+            lines.append(
+                f"{idx}. image={row['image']} | da_center={row['da_center_depth']} | "
+                f"ud_center={row['ud_center_depth']} | abs_diff={row['center_depth_abs_diff']}"
+            )
 
     report_text = "\n".join(lines) + "\n"
     report_path.write_text(report_text, encoding="utf-8")
@@ -118,21 +144,53 @@ def main() -> None:
         "## 中心深度大小關係（僅供尺度觀察）",
         f"- DA2 < UD2 次數: {da_lower_count}",
         f"- UD2 <= DA2 次數: {ud_lower_count}",
-        "",
-        "## 逐筆結果",
-        "",
-        "| # | image | da_center | ud_center | abs_diff |",
-        "|---|---|---:|---:|---:|",
     ]
 
-    for idx, row in enumerate(rows, start=1):
-        md_lines.append(
-            f"| {idx} | {row['image']} | {row['da_center_depth']} | {row['ud_center_depth']} | {row['center_depth_abs_diff']} |"
+    if has_m3:
+        da_m3 = [to_float(row, "da_m3_abs_diff") for row in rows]
+        ud_m3 = [to_float(row, "ud_m3_abs_diff") for row in rows]
+        md_lines.extend(
+            [
+                f"- DA2-M3 絕對差平均值: {sum(da_m3) / len(da_m3):.6f}",
+                f"- UD2-M3 絕對差平均值: {sum(ud_m3) / len(ud_m3):.6f}",
+            ]
         )
+
+    md_lines.extend(
+        [
+            "",
+            "## 逐筆結果",
+            "",
+        ]
+    )
+
+    if has_m3:
+        md_lines.extend(
+            [
+                "| # | image | da_center | ud_center | m3_center | da_ud | da_m3 | ud_m3 |",
+                "|---|---|---:|---:|---:|---:|---:|---:|",
+            ]
+        )
+    else:
+        md_lines.extend(
+            [
+                "| # | image | da_center | ud_center | abs_diff |",
+                "|---|---|---:|---:|---:|",
+            ]
+        )
+
+    for idx, row in enumerate(rows, start=1):
+        if has_m3:
+            md_lines.append(
+                f"| {idx} | {row['image']} | {row['da_center_depth']} | {row['ud_center_depth']} | {row['m3_center_depth']} | {row['da_ud_abs_diff']} | {row['da_m3_abs_diff']} | {row['ud_m3_abs_diff']} |"
+            )
+        else:
+            md_lines.append(
+                f"| {idx} | {row['image']} | {row['da_center_depth']} | {row['ud_center_depth']} | {row['center_depth_abs_diff']} |"
+            )
 
     markdown_text = "\n".join(md_lines) + "\n"
     markdown_path.write_text(markdown_text, encoding="utf-8")
-
     print(f"報告已輸出: {report_path}")
     print(f"Markdown 已輸出: {markdown_path}")
 

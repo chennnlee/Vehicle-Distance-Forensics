@@ -7,3 +7,5 @@ einops
 huggingface-hub
 timm
 wandb
+mmengine
+mmcv-lite

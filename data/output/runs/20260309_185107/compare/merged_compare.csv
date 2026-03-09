@@ -1,0 +1,2 @@
+image,scale_factor,da_center_depth,ud_center_depth,center_depth_abs_diff,da_roi_median,ud_roi_median,da_output,ud_output
+/home/s11244/code/114/Vehicle-Distance-Forensics/data/input/sample.jpg,1.0,0.5196913480758667,285.775390625,285.255699,nan,nan,/home/s11244/code/114/Vehicle-Distance-Forensics/data/output/runs/20260309_185107/compare/da2/sample_depth.png,/home/s11244/code/114/Vehicle-Distance-Forensics/data/output/runs/20260309_185107/compare/ud2/sample_depth.png

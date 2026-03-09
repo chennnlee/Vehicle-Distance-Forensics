@@ -3,8 +3,10 @@ import json
 import sys
 from typing import Literal, Optional
 
+import cv2
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 
 MODEL_CONFIGS = {
@@ -20,9 +22,10 @@ class DepthEngine:
 
     def __init__(self, checkpoints_dir: str | Path = "checkpoints") -> None:
         self.checkpoints_dir = Path(checkpoints_dir)
-        self.active_model: Optional[Literal["unidepth_v2", "depth_anything_v2"]] = None
+        self.active_model: Optional[Literal["unidepth_v2", "depth_anything_v2", "metric3d"]] = None
         self.depth_anything_encoder: str = "vits"
         self.unidepth_backbone: str = "vits14"
+        self.metric3d_variant: str = "vit_large"
         self.model = None
         self.input_size = 518
         self.device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
@@ -93,11 +96,107 @@ class DepthEngine:
 
         self.model = model.to(self.device).eval()
 
+    def _ensure_internal_metric3d_importable(self) -> Path:
+        metric3d_repo = self.project_root / "depth_models" / "Metric3D"
+        if not metric3d_repo.exists():
+            raise FileNotFoundError(f"找不到內建模型路徑: {metric3d_repo}")
+
+        repo_path = str(metric3d_repo)
+        if repo_path not in sys.path:
+            sys.path.insert(0, repo_path)
+        return metric3d_repo
+
+    def _resolve_metric3d_checkpoint_path(self, variant: str) -> Path | None:
+        candidates_map = {
+            "vit_small": [
+                self.checkpoints_dir / "metric_depth_vit_small_800k.pth",
+                self.project_root / "depth_models" / "Metric3D" / "weight" / "metric_depth_vit_small_800k.pth",
+            ],
+            "vit_large": [
+                self.checkpoints_dir / "metric_depth_vit_large_800k.pth",
+                self.project_root / "depth_models" / "Metric3D" / "weight" / "metric_depth_vit_large_800k.pth",
+            ],
+            "vit_giant2": [
+                self.checkpoints_dir / "metric_depth_vit_giant2_800k.pth",
+                self.project_root / "depth_models" / "Metric3D" / "weight" / "metric_depth_vit_giant2_800k.pth",
+            ],
+        }
+
+        for checkpoint_path in candidates_map[variant]:
+            if checkpoint_path.exists():
+                return checkpoint_path
+        return None
+
+    def _load_metric3d(self, variant: Literal["vit_small", "vit_large", "vit_giant2"]) -> None:
+        metric3d_repo = self._ensure_internal_metric3d_importable()
+        hub_name_map = {
+            "vit_small": "metric3d_vit_small",
+            "vit_large": "metric3d_vit_large",
+            "vit_giant2": "metric3d_vit_giant2",
+        }
+
+        self.metric3d_variant = variant
+        hub_name = hub_name_map[variant]
+        model = torch.hub.load(str(metric3d_repo), hub_name, source="local", pretrain=False)
+
+        checkpoint_path = self._resolve_metric3d_checkpoint_path(variant)
+        if checkpoint_path is not None:
+            state = torch.load(checkpoint_path, map_location="cpu")
+            if isinstance(state, dict) and "model_state_dict" in state:
+                state = state["model_state_dict"]
+            elif isinstance(state, dict) and "model" in state:
+                state = state["model"]
+            model.load_state_dict(state, strict=False)
+
+        self.model = model.to(self.device).eval()
+
+    def _infer_metric3d(self, image_bgr: np.ndarray) -> np.ndarray:
+        image_rgb = image_bgr[:, :, ::-1].copy()
+        h0, w0 = image_rgb.shape[:2]
+
+        target_size = (616, 1064)
+        scale = min(target_size[0] / h0, target_size[1] / w0)
+        resized = cv2.resize(image_rgb, (int(w0 * scale), int(h0 * scale)), interpolation=cv2.INTER_LINEAR)
+
+        h, w = resized.shape[:2]
+        pad_h = target_size[0] - h
+        pad_w = target_size[1] - w
+        pad_h_half = pad_h // 2
+        pad_w_half = pad_w // 2
+        pad_val = [123.675, 116.28, 103.53]
+        padded = cv2.copyMakeBorder(
+            resized,
+            pad_h_half,
+            pad_h - pad_h_half,
+            pad_w_half,
+            pad_w - pad_w_half,
+            cv2.BORDER_CONSTANT,
+            value=pad_val,
+        )
+
+        mean = torch.tensor([123.675, 116.28, 103.53], dtype=torch.float32).view(3, 1, 1)
+        std = torch.tensor([58.395, 57.12, 57.375], dtype=torch.float32).view(3, 1, 1)
+        rgb = torch.from_numpy(padded.transpose((2, 0, 1))).float()
+        rgb = torch.div((rgb - mean), std).unsqueeze(0).to(self.device)
+
+        with torch.no_grad():
+            pred_depth, _, _ = self.model.inference({"input": rgb})
+
+        pred_depth = pred_depth.squeeze()
+        pred_depth = pred_depth[
+            pad_h_half : pred_depth.shape[0] - (pad_h - pad_h_half),
+            pad_w_half : pred_depth.shape[1] - (pad_w - pad_w_half),
+        ]
+        pred_depth = F.interpolate(pred_depth[None, None, :, :], (h0, w0), mode="bilinear", align_corners=False).squeeze()
+        pred_depth = torch.clamp(pred_depth, 0, 300)
+        return pred_depth.detach().float().cpu().numpy().astype(np.float32)
+
     def load_model(
         self,
-        model_name: Literal["unidepth_v2", "depth_anything_v2"],
+        model_name: Literal["unidepth_v2", "depth_anything_v2", "metric3d"],
         encoder: Literal["vits", "vitb", "vitl", "vitg"] = "vits",
         unidepth_backbone: Literal["vits14", "vitb14", "vitl14"] = "vits14",
+        metric3d_variant: Literal["vit_small", "vit_large", "vit_giant2"] = "vit_large",
         input_size: int = 518,
     ) -> None:
         """載入指定模型。"""
@@ -106,6 +205,10 @@ class DepthEngine:
 
         if model_name == "unidepth_v2":
             self._load_unidepth_v2(unidepth_backbone)
+            return
+
+        if model_name == "metric3d":
+            self._load_metric3d(metric3d_variant)
             return
 
         self._ensure_internal_depth_anything_importable()
@@ -139,5 +242,8 @@ class DepthEngine:
             depth_tensor = predictions["depth"]
             depth = depth_tensor[0, 0].detach().float().cpu().numpy()
             return depth.astype(np.float32)
+
+        if self.active_model == "metric3d":
+            return self._infer_metric3d(image_bgr)
 
         raise RuntimeError(f"不支援的模型: {self.active_model}")

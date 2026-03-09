@@ -52,6 +52,12 @@ python main.py --model depth_anything_v2 --encoder vits --img-path data/input/sa
 python main.py --model unidepth_v2 --unidepth-backbone vits14 --img-path data/input/sample.jpg --out-path data/output/depth_vis_ud2.png
 ```
 
+### C. Metric3D
+
+```bash
+python main.py --model metric3d --metric3d-variant vit_large --img-path data/input/sample.jpg
+```
+
 ## 5) 最短指令
 
 - Depth Anything 預設：
@@ -62,6 +68,11 @@ python main.py
 - UniDepth：
 ```bash
 python main.py --model unidepth_v2
+```
+
+- Metric3D：
+```bash
+python main.py --model metric3d --metric3d-variant vit_large
 ```
 
 > `main.py` 若不指定 `--out-path`、`--csv-path`，會自動寫到本次 run 資料夾。

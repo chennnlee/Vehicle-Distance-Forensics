@@ -53,12 +53,13 @@ def prune_old_runs(project_root: Path, keep_runs: int) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run DA-V2 and UniDepth-V2, then export merged comparison CSV.")
+    parser = argparse.ArgumentParser(description="Run DA-V2, UniDepth-V2, Metric3D and export merged comparison CSV.")
     parser.add_argument("--img-path", type=str, default="data/input", help="Single image path or image directory")
     parser.add_argument("--bbox", type=str, default="", help="ROI bbox: x1,y1,x2,y2")
     parser.add_argument("--input-size", type=int, default=518)
     parser.add_argument("--encoder", type=str, default="vits", choices=["vits", "vitb", "vitl", "vitg"])
     parser.add_argument("--unidepth-backbone", type=str, default="vits14", choices=["vits14", "vitb14", "vitl14"])
+    parser.add_argument("--metric3d-variant", type=str, default="vit_large", choices=["vit_small", "vit_large", "vit_giant2"])
     parser.add_argument("--scale-factor", type=float, default=1.0)
     parser.add_argument("--anchor-pred", type=str, default="")
     parser.add_argument("--anchor-gt", type=str, default="")
@@ -81,6 +82,7 @@ def main() -> None:
 
     da_csv = out_dir / "depth_stats_da2.csv"
     ud_csv = out_dir / "depth_stats_ud2.csv"
+    m3_csv = out_dir / "depth_stats_metric3d.csv"
 
     common = [
         "--img-path",
@@ -133,21 +135,44 @@ def main() -> None:
         ],
     )
 
+    run_main(
+        project_root,
+        [
+            "--model",
+            "metric3d",
+            "--metric3d-variant",
+            args.metric3d_variant,
+            "--run-dir",
+            str(run_dir),
+            "--no-update-latest",
+            "--out-path",
+            str(out_dir / "metric3d"),
+            "--csv-path",
+            str(m3_csv),
+            *common,
+        ],
+    )
+
     da_rows = read_csv_rows(da_csv)
     ud_rows = read_csv_rows(ud_csv)
+    m3_rows = read_csv_rows(m3_csv)
     ud_by_image = {row["image"]: row for row in ud_rows}
+    m3_by_image = {row["image"]: row for row in m3_rows}
 
     merged_rows: list[dict[str, str]] = []
     for da in da_rows:
         image = da["image"]
         ud = ud_by_image.get(image)
-        if ud is None:
+        m3 = m3_by_image.get(image)
+        if ud is None or m3 is None:
             continue
 
         da_center = float(da["center_depth"])
         ud_center = float(ud["center_depth"])
+        m3_center = float(m3["center_depth"])
         da_roi = da["roi_median"]
         ud_roi = ud["roi_median"]
+        m3_roi = m3["roi_median"]
 
         merged_rows.append(
             {
@@ -155,11 +180,16 @@ def main() -> None:
                 "scale_factor": da["scale_factor"],
                 "da_center_depth": da["center_depth"],
                 "ud_center_depth": ud["center_depth"],
-                "center_depth_abs_diff": f"{abs(da_center - ud_center):.6f}",
+                "m3_center_depth": m3["center_depth"],
+                "da_ud_abs_diff": f"{abs(da_center - ud_center):.6f}",
+                "da_m3_abs_diff": f"{abs(da_center - m3_center):.6f}",
+                "ud_m3_abs_diff": f"{abs(ud_center - m3_center):.6f}",
                 "da_roi_median": da_roi,
                 "ud_roi_median": ud_roi,
+                "m3_roi_median": m3_roi,
                 "da_output": da["output"],
                 "ud_output": ud["output"],
+                "m3_output": m3["output"],
             }
         )
 
@@ -175,16 +205,22 @@ def main() -> None:
         "scale_factor",
         "da_center_depth",
         "ud_center_depth",
-        "center_depth_abs_diff",
+        "m3_center_depth",
+        "da_ud_abs_diff",
+        "da_m3_abs_diff",
+        "ud_m3_abs_diff",
         "da_roi_median",
         "ud_roi_median",
+        "m3_roi_median",
         "da_output",
         "ud_output",
+        "m3_output",
     ]
     write_csv_rows(merged_csv, merged_rows, fieldnames)
 
     print(f"DA2 CSV: {da_csv}")
     print(f"UD2 CSV: {ud_csv}")
+    print(f"M3  CSV: {m3_csv}")
     print(f"Merged CSV: {merged_csv}")
     print(f"Merged rows: {len(merged_rows)}")
     print(f"本次 run 目錄: {run_dir}")
