@@ -1,0 +1,9 @@
+numpy
+opencv-python
+matplotlib
+torch
+torchvision
+einops
+huggingface-hub
+timm
+wandb

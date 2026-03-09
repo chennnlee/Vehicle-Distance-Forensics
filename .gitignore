@@ -1,0 +1,38 @@
+# Python cache / bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE / OS noise
+.idea/
+.vscode/
+.DS_Store
+
+# Build / packaging
+build/
+dist/
+*.egg-info/
+
+# Logs
+*.log
+
+# Inference outputs / generated artifacts
+**/depth_vis/
+**/depth_vis*.png
+Vehicle-Distance-Forensics/data/depth_vis.png
+Vehicle-Distance-Forensics/data/archive/
+
+# Model weights (keep local, do not track)
+*.pth
+*.pt
+checkpoints/
+depth_models/**/checkpoints/
+depth_models/**/weight/
