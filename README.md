@@ -134,7 +134,7 @@ python tools/sharp_yolo_distance.py \
   --image data/input/cctv_keyframes/043.jpg \
   --pointcloud data/output/sharp_gaussians/043.ply \
   --out-dir data/output/sharp_yolo_distance \
-  --yolo-model yolov8m.pt \
+  --yolo-model checkpoints/yolov8m.pt \
   --y-axis-convention opencv-y-down \
   --ground-mode auto \
   --bbox-vertical-slice 0.55
@@ -150,7 +150,7 @@ python tools/sharp_yolo_distance.py \
   --image data/input/cctv_keyframes \
   --pointcloud data/output/sharp_gaussians \
   --out-dir data/output/sharp_yolo_distance \
-  --yolo-model yolov8m.pt \
+  --yolo-model checkpoints/yolov8m.pt \
   --fov-deg 70 \
   --y-axis-convention opencv-y-down \
   --ground-mode auto

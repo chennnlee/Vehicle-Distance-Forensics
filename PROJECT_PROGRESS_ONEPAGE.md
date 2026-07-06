@@ -53,7 +53,7 @@ Depth Anything V2、UniDepth V2、Metric3D 仍保留作為 baseline 或後續比
 - SHARP 車距 demo：tools/sharp_yolo_distance.py
 - SHARP 點雲 BEV：tools/sharp_to_bev.py
 - 點雲讀取：utils/pointcloud_io.py
-- 重新提案：SHARP_DEMO_REPROPOSAL.md
+- 重新提案：docs/SHARP_DEMO_REPROPOSAL.md
 
 ## 5. 產出位置
 - 輸出根目錄：data/output/
@@ -74,7 +74,7 @@ Depth Anything V2、UniDepth V2、Metric3D 仍保留作為 baseline 或後續比
 
 ## 8. 快速執行指令
 - SHARP + YOLO 車距 demo：
-  python tools/sharp_yolo_distance.py --image data/input/cctv_keyframes/043.jpg --pointcloud data/output/sharp_gaussians/043.ply --out-dir data/output/sharp_yolo_distance --yolo-model yolov8m.pt --ground-mode auto --bbox-vertical-slice 0.55
+  python tools/sharp_yolo_distance.py --image data/input/cctv_keyframes/043.jpg --pointcloud data/output/sharp_gaussians/043.ply --out-dir data/output/sharp_yolo_distance --yolo-model checkpoints/yolov8m.pt --ground-mode auto --bbox-vertical-slice 0.55
 
 - SHARP 點雲轉 BEV 視覺化：
   python tools/sharp_to_bev.py --input data/output/sharp_gaussians --out-dir data/output/sharp_bev --reference-image data/input/cctv_keyframes
