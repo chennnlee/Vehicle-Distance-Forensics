@@ -16,6 +16,10 @@ env/
 .vscode/
 .DS_Store
 
+# Local agent / cache noise
+.codex
+.cache/
+
 # Build / packaging
 build/
 dist/
@@ -25,10 +29,17 @@ dist/
 *.log
 
 # Inference outputs / generated artifacts
+data/output/
 **/depth_vis/
 **/depth_vis*.png
 Vehicle-Distance-Forensics/data/depth_vis.png
 Vehicle-Distance-Forensics/data/archive/
+
+# Large local datasets and generated inputs
+data/nuscenes/
+data/input/*/
+data/20260317_AI辨速系統案例/
+data/v1.0-mini.tgz
 
 # Model weights (keep local, do not track)
 *.pth
@@ -36,3 +47,26 @@ Vehicle-Distance-Forensics/data/archive/
 checkpoints/
 depth_models/**/checkpoints/
 depth_models/**/weight/
+
+# Vendored demo/media assets from depth model repos (not used by our code)
+depth_models/Depth-Anything-V2/assets/
+depth_models/Depth-Anything-V2/metric_depth/assets/
+depth_models/Depth-Anything-V2/metric_depth/dataset/splits/
+depth_models/Metric3D/data/
+depth_models/Metric3D/media/
+depth_models/Metric3D/training/kitti_json_files/*.json
+depth_models/Metric3D/training/kitti_json_files/*.txt
+depth_models/UniDepth/assets/demo/
+depth_models/UniDepth/assets/docs/*.png
+depth_models/UniDepth/assets/docs/*.gif
+
+# Vendored third-party tool repos (clone separately per README)
+tools/BEVFormer/
+tools/mmdetection3d/
+tools/monolayout/
+tools/SimpleBEV/
+tools/ml-sharp/
+
+# Personal / non-code documents
+2025-補助大專學生研究計畫申請書-徐鐽睿.pdf
+*:Zone.Identifier
