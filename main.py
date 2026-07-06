@@ -9,8 +9,9 @@ import numpy as np
 
 from core.calibration import apply_scale, compute_scale_factor
 from core.depth_engine import DepthEngine
-from core.geometry import CameraIntrinsics, depth_to_point_cloud, to_bev
-from utils.visualizer import save_bev_scatter, save_depth_colormap
+from utils.bevheight import BEVHeightConfig, project_depth_to_bevheight, save_bevheight_preview
+from utils.ipm_bev import IPMBEVConfig, PseudoPointCloudBEVConfig, save_ipm_bev, save_pointcloud_bev
+from utils.visualizer import save_depth_colormap
 
 
 def parse_bbox(bbox_text: str) -> tuple[int, int, int, int]:
@@ -26,6 +27,13 @@ def parse_float_list(text: str) -> np.ndarray:
     if not parts:
         raise ValueError("清單不可為空")
     return np.asarray([float(v) for v in parts], dtype=np.float32)
+
+
+def parse_two_floats(text: str, label: str) -> tuple[float, float]:
+    values = parse_float_list(text)
+    if values.size != 2:
+        raise ValueError(f"{label} 格式需為 min,max")
+    return float(values[0]), float(values[1])
 
 
 def clamp_bbox(bbox: tuple[int, int, int, int], h: int, w: int) -> tuple[int, int, int, int]:
@@ -90,7 +98,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Vehicle Distance Forensics MVP")
     parser.add_argument("--model", type=str, default="depth_anything_v2", choices=["depth_anything_v2", "unidepth_v2", "metric3d"])
     parser.add_argument("--img-path", type=str, default="data/input/sample.jpg")
-    parser.add_argument("--encoder", type=str, default="vits", choices=["vits", "vitb", "vitl", "vitg"])
+    parser.add_argument("--encoder", type=str, default="vitl", choices=["vits", "vitb", "vitl", "vitg"])
     parser.add_argument("--unidepth-backbone", type=str, default="vits14", choices=["vits14", "vitb14", "vitl14"])
     parser.add_argument("--metric3d-variant", type=str, default="vit_large", choices=["vit_small", "vit_large", "vit_giant2"])
     parser.add_argument("--input-size", type=int, default=518)
@@ -105,6 +113,20 @@ def main() -> None:
     parser.add_argument("--anchor-pred", type=str, default="", help="預測錨點距離清單，例: 0.52,0.81")
     parser.add_argument("--anchor-gt", type=str, default="", help="真實錨點距離清單，例: 5.0,8.0")
     parser.add_argument("--auto-scale-gt", type=float, default=None, help="參考物真值距離(公尺)，搭配 --bbox 自動估計每張圖尺度")
+    parser.add_argument("--save-simplebev", action="store_true", help="把原始影像轉成鳥瞰圖輸出")
+    parser.add_argument("--bev-mode", type=str, default="pcd", choices=["ipm", "height", "pcd"], help="BEV 模式：pcd=偽點雲俯視, ipm=原圖鳥瞰, height=深度高度分層")
+    parser.add_argument("--bev-output-dir", type=str, default="", help="BEV 輸出目錄；留空時自動放入本次 run 資料夾")
+    parser.add_argument("--bev-x-range", type=str, default="-20,20", help="BEV 左右範圍，格式: min,max，單位公尺")
+    parser.add_argument("--bev-z-range", type=str, default="0,60", help="BEV 前方範圍，格式: min,max，單位公尺")
+    parser.add_argument("--bev-y-range", type=str, default="-12,12", help="IPM 左右範圍，格式: min,max，單位公尺")
+    parser.add_argument("--bev-output-size", type=str, default="800,800", help="IPM 輸出大小，格式: width,height")
+    parser.add_argument("--bev-camera-height", type=float, default=1.6, help="相機高度(公尺)，用於 IPM 鳥瞰")
+    parser.add_argument("--bev-height-range", type=str, default="-3,5", help="高度範圍，格式: min,max，單位公尺")
+    parser.add_argument("--bev-height-bins", type=int, default=8, help="高度分層數量")
+    parser.add_argument("--bev-resolution", type=float, default=0.2, help="BEV 每格代表的公尺數")
+    parser.add_argument("--bev-fov-deg", type=float, default=90.0, help="投影時假設的水平視角")
+    parser.add_argument("--bev-ground-start-ratio", type=float, default=0.45, help="只取影像下半部多少比例後的像素來做 BEV")
+    parser.add_argument("--bev-pitch-deg", type=float, default=0.0, help="投影時假設的相機俯仰角，正值代表往下看")
     args = parser.parse_args()
 
     project_root = Path(__file__).resolve().parent
@@ -129,6 +151,18 @@ def main() -> None:
         csv_path = run_dir / "depth_stats.csv"
     csv_path.parent.mkdir(parents=True, exist_ok=True)
 
+    bev_output_dir = None
+    if args.save_simplebev:
+        default_bev_dir = {
+            "ipm": "bev_ipm",
+            "height": "bevheight",
+            "pcd": "bev_pcd",
+        }[args.bev_mode]
+        bev_output_dir = Path(args.bev_output_dir) if args.bev_output_dir.strip() else run_dir / default_bev_dir
+        if not bev_output_dir.is_absolute():
+            bev_output_dir = project_root / bev_output_dir
+        bev_output_dir.mkdir(parents=True, exist_ok=True)
+
     if not image_path.exists():
         print(f"找不到輸入路徑: {image_path}")
         return
@@ -145,6 +179,46 @@ def main() -> None:
         unidepth_backbone=args.unidepth_backbone,
         metric3d_variant=args.metric3d_variant,
         input_size=args.input_size,
+    )
+
+    if args.save_simplebev and args.model != "metric3d":
+        raise ValueError("--save-simplebev 目前只支援 --model metric3d，也就是 Metric3D v2 路線")
+
+    bev_x_range = parse_two_floats(args.bev_x_range, "--bev-x-range")
+    bev_z_range = parse_two_floats(args.bev_z_range, "--bev-z-range")
+    bev_height_range = parse_two_floats(args.bev_height_range, "--bev-height-range")
+    bev_y_range = parse_two_floats(args.bev_y_range, "--bev-y-range")
+    bev_output_size_parts = parse_float_list(args.bev_output_size)
+    if bev_output_size_parts.size != 2:
+        raise ValueError("--bev-output-size 格式需為 width,height")
+    bev_output_size = (int(bev_output_size_parts[0]), int(bev_output_size_parts[1]))
+    bevheight_config = BEVHeightConfig(
+        x_range_m=bev_x_range,
+        z_range_m=bev_z_range,
+        height_range_m=bev_height_range,
+        resolution_m=args.bev_resolution,
+        fov_deg=args.bev_fov_deg,
+        ground_start_ratio=args.bev_ground_start_ratio,
+        pitch_deg=args.bev_pitch_deg,
+        num_height_bins=args.bev_height_bins,
+    )
+    ipm_config = IPMBEVConfig(
+        x_range_m=bev_x_range,
+        y_range_m=bev_y_range,
+        output_size=bev_output_size,
+        camera_height_m=args.bev_camera_height,
+        pitch_deg=args.bev_pitch_deg,
+        fov_deg=args.bev_fov_deg,
+        yaw_deg=0.0,
+    )
+    pointcloud_config = PseudoPointCloudBEVConfig(
+        x_range_m=bev_x_range,
+        y_range_m=bev_y_range,
+        output_size=bev_output_size,
+        camera_height_m=args.bev_camera_height,
+        pitch_deg=args.bev_pitch_deg,
+        fov_deg=args.bev_fov_deg,
+        height_range_m=(-20.0, 20.0),
     )
 
     scale_factor = args.scale_factor
@@ -215,16 +289,36 @@ def main() -> None:
                     f"\n自動尺度校正: gt={auto_scale_gt:.6f}, est_raw={auto_scale_est:.6f}, s={sample_scale_factor:.6f}"
                 )
 
-        intrinsics = CameraIntrinsics(fx=1000.0, fy=1000.0, cx=image.shape[1] / 2, cy=image.shape[0] / 2)
-        points_xyz = depth_to_point_cloud(depth, intrinsics)
-        points_bev = to_bev(points_xyz)
-        bev_grid = points_bev.reshape(depth.shape[0], depth.shape[1], 2)
-        bev_center_distance_m = float(bev_grid[center_y, center_x, 1])
-        bev_roi_median_distance_m = float("nan")
-        if args.bbox:
-            roi_bev = bev_grid[y1:y2, x1:x2, 1]
-            bev_roi_median_distance_m = float(np.median(roi_bev))
-            bbox_stats_text += f"\nBEV 前向距離中位數: {bev_roi_median_distance_m:.6f}"
+        bev_output_path = ""
+        bev_nonzero_ratio = np.nan
+        bev_peak = np.nan
+        bev_mean_height = np.nan
+        bev_height_bins = np.nan
+        bev_ipm_coverage = np.nan
+        bev_pcd_coverage = np.nan
+        bev_pcd_peak_height = np.nan
+        bev_pcd_mean_height = np.nan
+        bev_pcd_points = np.nan
+        if args.save_simplebev and bev_output_dir is not None:
+            if args.bev_mode == "ipm":
+                bev_output_path = bev_output_dir / f"{image_file.stem}_bev_ipm.png"
+                _, bev_stats = save_ipm_bev(image, bev_output_path, ipm_config)
+                bev_ipm_coverage = float(bev_stats["ipm_coverage"])
+            elif args.bev_mode == "pcd":
+                bev_output_path = bev_output_dir / f"{image_file.stem}_bev_pcd.png"
+                _, bev_stats = save_pointcloud_bev(image, depth, bev_output_path, pointcloud_config)
+                bev_pcd_coverage = float(bev_stats["pcd_coverage"])
+                bev_pcd_peak_height = float(bev_stats["pcd_peak_height_m"])
+                bev_pcd_mean_height = float(bev_stats["pcd_mean_height_m"])
+                bev_pcd_points = float(bev_stats["pcd_points"])
+            else:
+                bev_preview, bev_stats = project_depth_to_bevheight(depth, bevheight_config)
+                bev_output_path = bev_output_dir / f"{image_file.stem}_bevheight.png"
+                save_bevheight_preview(bev_preview, bev_output_path)
+                bev_nonzero_ratio = float(bev_stats["bevheight_nonzero_ratio"])
+                bev_peak = float(bev_stats["bevheight_peak"])
+                bev_mean_height = float(bev_stats["bevheight_mean_height"])
+                bev_height_bins = float(bev_stats["bevheight_height_bins"])
 
         if is_batch:
             output_path = output_path_arg / f"{image_file.stem}_depth.png"
@@ -232,12 +326,6 @@ def main() -> None:
             output_path = output_path_arg
         output_path.parent.mkdir(parents=True, exist_ok=True)
         save_depth_colormap(depth, output_path)
-
-        if is_batch:
-            bev_output_path = output_path_arg / f"{image_file.stem}_bev.png"
-        else:
-            bev_output_path = run_dir / "bev.png"
-        save_bev_scatter(points_bev, bev_output_path)
 
         csv_rows.append(
             {
@@ -254,10 +342,17 @@ def main() -> None:
                 "auto_scale_gt": auto_scale_gt,
                 "auto_scale_est_raw": auto_scale_est,
                 "auto_scale_enabled": int(auto_scale_enabled),
-                "bev_center_distance_m": bev_center_distance_m,
-                "bev_roi_median_distance_m": bev_roi_median_distance_m,
-                "output": str(output_path),
+                "bev_nonzero_ratio": bev_nonzero_ratio,
+                "bev_peak": bev_peak,
+                "bev_mean_height": bev_mean_height,
+                "bev_height_bins": bev_height_bins,
+                "bev_ipm_coverage": bev_ipm_coverage,
+                "bev_pcd_coverage": bev_pcd_coverage,
+                "bev_pcd_peak_height": bev_pcd_peak_height,
+                "bev_pcd_mean_height": bev_pcd_mean_height,
+                "bev_pcd_points": bev_pcd_points,
                 "bev_output": str(bev_output_path),
+                "output": str(output_path),
             }
         )
 
@@ -265,11 +360,22 @@ def main() -> None:
         print(f"中心點座標: (x={center_x}, y={center_y})")
         print(f"套用尺度係數: {sample_scale_factor:.6f}")
         print(f"中心點深度值: {center_depth:.6f}")
-        print(f"BEV 中心前向距離: {bev_center_distance_m:.6f}")
         if bbox_stats_text:
             print(bbox_stats_text)
+        if args.save_simplebev and bev_output_path:
+            if args.bev_mode == "ipm":
+                print(f"IPM 鳥瞰圖輸出: {bev_output_path} (coverage={bev_ipm_coverage:.6f})")
+            elif args.bev_mode == "pcd":
+                print(
+                    f"偽點雲 BEV 輸出: {bev_output_path} "
+                    f"(coverage={bev_pcd_coverage:.6f}, points={bev_pcd_points:.0f}, peak_height={bev_pcd_peak_height:.3f}m, mean_height={bev_pcd_mean_height:.3f}m)"
+                )
+            else:
+                print(
+                    f"BEVHeight 輸出: {bev_output_path} "
+                    f"(nonzero_ratio={bev_nonzero_ratio:.6f}, peak={bev_peak:.6f}, mean_height={bev_mean_height:.6f}, bins={bev_height_bins:.0f})"
+                )
         print(f"完成推論，已輸出深度圖: {output_path}")
-        print(f"已輸出 BEV 圖: {bev_output_path}")
 
     with open(csv_path, "w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(
@@ -288,10 +394,17 @@ def main() -> None:
                 "auto_scale_gt",
                 "auto_scale_est_raw",
                 "auto_scale_enabled",
-                "bev_center_distance_m",
-                "bev_roi_median_distance_m",
-                "output",
+                "bev_nonzero_ratio",
+                "bev_peak",
+                "bev_mean_height",
+                "bev_height_bins",
+                "bev_ipm_coverage",
+                "bev_pcd_coverage",
+                "bev_pcd_peak_height",
+                "bev_pcd_mean_height",
+                "bev_pcd_points",
                 "bev_output",
+                "output",
             ],
         )
         writer.writeheader()

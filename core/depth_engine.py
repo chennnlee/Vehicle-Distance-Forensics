@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from pathlib import Path
 import json
 import sys
@@ -23,7 +25,7 @@ class DepthEngine:
     def __init__(self, checkpoints_dir: str | Path = "checkpoints") -> None:
         self.checkpoints_dir = Path(checkpoints_dir)
         self.active_model: Optional[Literal["unidepth_v2", "depth_anything_v2", "metric3d"]] = None
-        self.depth_anything_encoder: str = "vits"
+        self.depth_anything_encoder: str = "vitl"
         self.unidepth_backbone: str = "vits14"
         self.metric3d_variant: str = "vit_large"
         self.model = None
@@ -194,7 +196,7 @@ class DepthEngine:
     def load_model(
         self,
         model_name: Literal["unidepth_v2", "depth_anything_v2", "metric3d"],
-        encoder: Literal["vits", "vitb", "vitl", "vitg"] = "vits",
+        encoder: Literal["vits", "vitb", "vitl", "vitg"] = "vitl",
         unidepth_backbone: Literal["vits14", "vitb14", "vitl14"] = "vits14",
         metric3d_variant: Literal["vit_small", "vit_large", "vit_giant2"] = "vit_large",
         input_size: int = 518,
