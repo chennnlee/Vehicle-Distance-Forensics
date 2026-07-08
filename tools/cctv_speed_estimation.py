@@ -144,6 +144,7 @@ def render_video(
     playback_fps: int,
     trail_seconds: float = 6.0,
     mode: str = "realtime",
+    anchors: list | None = None,
 ) -> None:
     """Real-time annotated playback: each source frame is repeated to match its
     true duration (from OSD-clock timestamps), so vehicle motion in the output
@@ -161,6 +162,19 @@ def render_video(
 
     def lerp(a: float, b: float, w: float) -> float:
         return a + (b - a) * w
+
+    def draw_anchors(img: np.ndarray) -> None:
+        # The calibration dashes ARE the measurement's ruler; showing them in
+        # every frame lets a report viewer see where the scale comes from.
+        if not anchors:
+            return
+        for an in anchors:
+            p1 = tuple(int(v) for v in an["p1"])
+            p2 = tuple(int(v) for v in an["p2"])
+            cv2.line(img, p1, p2, (0, 255, 0), 3)
+            mid = ((p1[0] + p2[0]) // 2 + 8, (p1[1] + p2[1]) // 2)
+            cv2.putText(img, an["label"], mid, cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 4)
+            cv2.putText(img, an["label"], mid, cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 2)
 
     def draw_at(img: np.ndarray, t_render: float) -> None:
         # Source frames arrive at ~1-4fps, but we know each track's positions
@@ -217,6 +231,7 @@ def render_video(
         speedup = span / max(1e-9, len(frames) / playback_fps)
         for i, f in enumerate(frames):
             img = cv2.imread(str(f))
+            draw_anchors(img)
             draw_at(img, float(times[i]))
             note = f"native playback (~x{speedup:.1f} time-compressed)"
             cv2.putText(img, note, (16, img.shape[0] - 16), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 4)
@@ -231,6 +246,7 @@ def render_video(
         repeats = max(1, int(round(dt * playback_fps)))
         for k in range(repeats):
             img = base.copy()
+            draw_anchors(img)
             draw_at(img, t0 + dt * (k / repeats))
             writer.write(img)
     writer.release()
