@@ -312,9 +312,22 @@ def main() -> None:
             tr["pos"] = det["pos"]
             tr["last_t"] = t_now
             tr["n_obs"] += 1
-            tracks[tr["id"]]["obs"].append(
+            # Display speed over a >=0.6s baseline, not adjacent frames: at
+            # 20fps the inter-frame dt is 0.05s, so a few-dozen-cm bbox jitter
+            # divided by 0.05s fabricates tens of km/h on stationary vehicles.
+            hist = tracks[tr["id"]]["obs"]
+            disp_speed = 0.0
+            for old in reversed(hist):
+                if t_now - old["t"] >= 0.6:
+                    d = float(np.linalg.norm(det["pos"] - np.array(old["pos_m"])))
+                    dt_w = t_now - old["t"]
+                    disp_speed = 0.0 if d < 0.35 else (d / dt_w) * 3.6
+                    break
+            else:
+                disp_speed = float(np.linalg.norm(tr["vel"])) * 3.6 if tr["n_obs"] > 3 else 0.0
+            hist.append(
                 {"frame": i, "t": t_now, "px": det["px"], "py": det["py"], "box": det["box"],
-                 "pos_m": det["pos"].tolist(), "speed_kmh": float(np.linalg.norm(tr["vel"])) * 3.6}
+                 "pos_m": det["pos"].tolist(), "speed_kmh": disp_speed}
             )
 
         for di, det in enumerate(dets):
