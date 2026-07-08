@@ -29,6 +29,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--reference-pointcloud", required=True, help="SHARP PLY of a reference frame from the SAME camera view.")
     parser.add_argument("--pointcloud-scale", type=float, required=True, help="Anchor-derived scale factor (e.g. from lane_dash_calibration).")
     parser.add_argument("--clock-roi", default="0,0,520,40", help="OSD clock region x1,y1,x2,y2 used to detect 1-second ticks for frame timing.")
+    parser.add_argument("--fps", type=float, default=0.0, help="Known constant frame rate. When set, timestamps are i/fps and the OSD clock is not used (for re-encoded evidence videos without a reliable ticking clock).")
     parser.add_argument("--yolo-model", default="checkpoints/yolov8m-seg.pt", help="Ultralytics model for track().")
     parser.add_argument("--conf", type=float, default=0.3, help="Detection confidence threshold.")
     parser.add_argument("--out-dir", required=True, help="Output directory.")
@@ -49,15 +50,22 @@ def frame_times_from_clock(frames: list[Path], clock_roi: tuple[int, int, int, i
     two ticks are spread uniformly inside that second.
     """
     x1, y1, x2, y2 = clock_roi
-    hashes = []
+    bins = []
     for f in frames:
         img = cv2.imread(str(f), cv2.IMREAD_GRAYSCALE)
         crop = img[y1:y2, x1:x2]
-        # Threshold to suppress JPEG noise so only a real digit change flips the hash
-        binar = (crop > 160).astype(np.uint8)
-        hashes.append(binar.tobytes())
+        bins.append((crop > 160).astype(np.uint8))
 
-    tick_idx = [i for i in range(1, len(hashes)) if hashes[i] != hashes[i - 1]]
+    # A digit rollover flips tens of pixels at once; JPEG noise flips a few
+    # scattered ones. Requiring a minimum changed-pixel count keeps the
+    # detector from firing on every frame of a high-fps, noisy encode.
+    area = max(1, (y2 - y1) * (x2 - x1))
+    min_changed = max(25, int(area * 0.004))
+    tick_idx = [
+        i
+        for i in range(1, len(bins))
+        if int(np.count_nonzero(bins[i] != bins[i - 1])) >= min_changed
+    ]
     if len(tick_idx) < 2:
         raise RuntimeError("OSD clock ticks not detected; check --clock-roi.")
 
@@ -166,10 +174,18 @@ def render_video(
             for p, q in zip(trail[:-1], trail[1:]):
                 cv2.line(img, p, q, color, 2)
             px, py = int(o["px"]), int(o["py"])
-            cv2.circle(img, (px, py), 5, color, -1)
+            box = o.get("box")
+            if box is not None:
+                bx1, by1, bx2, by2 = [int(v) for v in box]
+                cv2.rectangle(img, (bx1, by1), (bx2, by2), color, 2)
+                label_anchor = (bx1, max(20, by1 - 8))
+            else:
+                label_anchor = (px + 8, py - 8)
+            cv2.circle(img, (px, py), 6, color, -1)
+            cv2.circle(img, (px, py), 6, (255, 255, 255), 1)
             label = f"id{tid} {rec['cls']} {o.get('speed_kmh', 0):.0f}km/h"
-            cv2.putText(img, label, (px + 8, py - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 4)
-            cv2.putText(img, label, (px + 8, py - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+            cv2.putText(img, label, label_anchor, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 4)
+            cv2.putText(img, label, label_anchor, cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
         dt = float(times[i + 1] - times[i]) if i + 1 < len(times) else float(np.median(np.diff(times)))
         repeats = max(1, int(round(dt * playback_fps)))
@@ -192,8 +208,11 @@ def main() -> None:
     sample = cv2.imread(str(frames[0]))
     img_h, img_w = sample.shape[:2]
 
-    clock_roi = tuple(int(v) for v in args.clock_roi.split(","))
-    times = frame_times_from_clock(frames, clock_roi)
+    if args.fps > 0:
+        times = np.arange(len(frames), dtype=np.float64) / args.fps
+    else:
+        clock_roi = tuple(int(v) for v in args.clock_roi.split(","))
+        times = frame_times_from_clock(frames, clock_roi)
     print(f"frames={len(frames)} span={times[-1]-times[0]:.1f}s median_dt={np.median(np.diff(times)):.3f}s")
 
     ply_path = Path(args.reference_pointcloud)
@@ -228,7 +247,8 @@ def main() -> None:
                 gp = pixel_to_ground_m((x1 + x2) / 2.0, y2)
                 if gp is None:
                     continue
-                dets.append({"cls": VEHICLE_CLASSES[int(cls)], "px": float((x1 + x2) / 2), "py": float(y2), "pos": gp})
+                dets.append({"cls": VEHICLE_CLASSES[int(cls)], "px": float((x1 + x2) / 2), "py": float(y2),
+                             "box": [float(x1), float(y1), float(x2), float(y2)], "pos": gp})
 
         # Predict each active track forward and build a gated cost matrix,
         # then solve globally with Hungarian assignment. Greedy NN caused ID
@@ -293,8 +313,8 @@ def main() -> None:
             tr["last_t"] = t_now
             tr["n_obs"] += 1
             tracks[tr["id"]]["obs"].append(
-                {"frame": i, "t": t_now, "px": det["px"], "py": det["py"], "pos_m": det["pos"].tolist(),
-                 "speed_kmh": float(np.linalg.norm(tr["vel"])) * 3.6}
+                {"frame": i, "t": t_now, "px": det["px"], "py": det["py"], "box": det["box"],
+                 "pos_m": det["pos"].tolist(), "speed_kmh": float(np.linalg.norm(tr["vel"])) * 3.6}
             )
 
         for di, det in enumerate(dets):
@@ -304,8 +324,8 @@ def main() -> None:
             next_id += 1
             active.append({"id": tid, "cls": det["cls"], "pos": det["pos"], "vel": np.zeros(3), "last_t": t_now, "n_obs": 1})
             tracks[tid] = {"cls": det["cls"], "obs": [
-                {"frame": i, "t": t_now, "px": det["px"], "py": det["py"], "pos_m": det["pos"].tolist(),
-                 "speed_kmh": 0.0}
+                {"frame": i, "t": t_now, "px": det["px"], "py": det["py"], "box": det["box"],
+                 "pos_m": det["pos"].tolist(), "speed_kmh": 0.0}
             ]}
 
         active = [tr for tr in active if t_now - tr["last_t"] <= 3.0]
