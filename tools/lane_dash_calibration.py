@@ -116,19 +116,28 @@ def detect_dash_chain(
 
     # The largest component is not always on the lane line of interest (it can
     # be a crosswalk stripe); try the top candidates as seeds and keep the
-    # longest resulting chain.
-    seeds = sorted(segments, key=lambda s: -s.area)[:8]
-    best_chain: list[DashSegment] = []
-    for seed in seeds:
-        chain = build_chain(seed)
-        if len(chain) > len(best_chain) or (
-            len(chain) == len(best_chain)
-            and chain
-            and best_chain
-            and sum(c.area for c in chain) > sum(c.area for c in best_chain)
-        ):
-            best_chain = chain
-    return best_chain
+    # longest resulting chain. Then PEEL: remove the winning chain's members
+    # and repeat, so every dashed lane line in view becomes its own chain --
+    # each one is an independent ruler that can cross-check the others.
+    chains: list[list[DashSegment]] = []
+    remaining = list(segments)
+    for _ in range(6):
+        seeds = sorted(remaining, key=lambda s: -s.area)[:8]
+        best_chain: list[DashSegment] = []
+        for seed in seeds:
+            chain = [c for c in build_chain(seed) if c in remaining]
+            if len(chain) > len(best_chain) or (
+                len(chain) == len(best_chain)
+                and chain
+                and best_chain
+                and sum(c.area for c in chain) > sum(c.area for c in best_chain)
+            ):
+                best_chain = chain
+        if len(best_chain) < 2:
+            break
+        chains.append(best_chain)
+        remaining = [s for s in remaining if s not in best_chain]
+    return chains
 
 
 def sample_3d(
@@ -250,7 +259,7 @@ def main() -> None:
     else:
         x1, y1, x2, y2 = 0, int(img_h * 0.4), img_w, img_h
 
-    chain = detect_dash_chain(
+    all_chains = detect_dash_chain(
         gray,
         (x1, y1, x2, y2),
         local_contrast=args.local_contrast,
@@ -259,6 +268,8 @@ def main() -> None:
         min_elongation=args.min_elongation,
         collinear_tol_px=args.collinear_tol_px,
     )
+    chain = all_chains[0] if all_chains else []
+    secondary_chains = all_chains[1:]
 
     result: dict[str, object] = {
         "image": str(image_path),
@@ -477,8 +488,51 @@ def main() -> None:
                 }
             )
 
+    sec_results = []
+    if secondary_chains and ground is not None:
+        h_thr = max(2.5 * ground["residual_median"], 0.02 * ground["median_depth"])
+        for ch in secondary_chains:
+            lens, tips = [], []
+            for seg in ch:
+                radius = max(3.0, seg.length_px * 0.10)
+                p_n, _ = sample_3d(points_xyz, u, v, *seg.tip_near, radius)
+                p_f, _ = sample_3d(points_xyz, u, v, *seg.tip_far, radius)
+                if p_n is None or p_f is None:
+                    continue
+                if max(height_above_plane(p_n, ground), height_above_plane(p_f, ground)) > h_thr:
+                    continue
+                L = float(np.linalg.norm(p_f - p_n))
+                lens.append(L)
+                tips.append((seg.tip_near.tolist(), seg.tip_far.tolist(), L))
+            if len(lens) >= 2:
+                med = float(np.median(lens))
+                entry = {
+                    "count": len(lens),
+                    "median_raw_m": med,
+                    "length_cv": float(np.std(lens) / max(1e-9, np.mean(lens))),
+                    "tips": tips,
+                }
+                if result.get("identified_spec"):
+                    spec_d = MARKING_SPECS[result["identified_spec"]]["dash_m"]
+                    entry["scale_if_same_spec"] = spec_d / med
+                sec_results.append(entry)
+    result["secondary_chains"] = [
+        {k: v for k, v in e.items() if k != "tips"} for e in sec_results
+    ]
+
     canvas = image.copy()
     scale_for_draw = result.get("scale_factor")
+    # 次要車道線(青色):獨立的尺,量出的公尺數可與主鏈互相印證
+    for e in sec_results:
+        for tn, tf, L in e["tips"]:
+            p1 = np.array(tn, dtype=np.float64).astype(int)
+            p2 = np.array(tf, dtype=np.float64).astype(int)
+            cv2.line(canvas, tuple(p1), tuple(p2), (255, 255, 0), 2)
+            if scale_for_draw is not None:
+                mid = ((p1 + p2) // 2)
+                text = f"{L * scale_for_draw:.2f}m"
+                cv2.putText(canvas, text, (mid[0] + 8, mid[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 4)
+                cv2.putText(canvas, text, (mid[0] + 8, mid[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
     for row in rejected_rows:
         p1 = np.array(row["tip_near_px"], dtype=int)
         p2 = np.array(row["tip_far_px"], dtype=int)
