@@ -149,47 +149,69 @@ def render_video(
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     writer = cv2.VideoWriter(str(video_path), fourcc, playback_fps, (w, h))
 
-    # Index observations by frame for O(1) lookup during rendering
-    obs_by_frame: dict[int, list[tuple[int, dict]]] = {}
+    # Sorted per-track observation arrays for time interpolation
+    track_obs: dict[int, list[dict]] = {}
     for tid, rec in tracks.items():
-        if tid not in reported:
-            continue
-        for o in rec["obs"]:
-            obs_by_frame.setdefault(o["frame"], []).append((tid, o))
+        if tid in reported and rec["obs"]:
+            track_obs[tid] = sorted(rec["obs"], key=lambda o: o["t"])
 
-    last_seen: dict[int, dict] = {}
-    for i, f in enumerate(frames):
-        img = cv2.imread(str(f))
-        t_now = float(times[i])
-        for tid, o in obs_by_frame.get(i, []):
-            last_seen[tid] = o
+    def lerp(a: float, b: float, w: float) -> float:
+        return a + (b - a) * w
 
-        for tid, o in list(last_seen.items()):
-            if t_now - o["t"] > 2.5:
-                del last_seen[tid]
+    def draw_at(img: np.ndarray, t_render: float) -> None:
+        # Source frames arrive at ~1-4fps, but we know each track's positions
+        # at consecutive observations, so annotations are interpolated to the
+        # playback timestamp: boxes glide between detections instead of
+        # jumping once per source frame, and a track disappears right after
+        # its last observation instead of freezing in place for seconds.
+        for tid, obs in track_obs.items():
+            if t_render < obs[0]["t"] or t_render > obs[-1]["t"] + 0.3:
                 continue
+            hi = 0
+            while hi < len(obs) and obs[hi]["t"] < t_render:
+                hi += 1
+            if hi == 0:
+                a = b = obs[0]
+                w = 0.0
+            elif hi >= len(obs):
+                a = b = obs[-1]
+                w = 0.0
+            else:
+                a, b = obs[hi - 1], obs[hi]
+                span = b["t"] - a["t"]
+                w = 0.0 if span <= 1e-9 else (t_render - a["t"]) / span
+
             color = _id_color(tid)
             rec = tracks[tid]
-            trail = [(int(p["px"]), int(p["py"])) for p in rec["obs"] if t_now - trail_seconds <= p["t"] <= t_now]
+            trail = [(int(p["px"]), int(p["py"])) for p in obs if t_render - trail_seconds <= p["t"] <= t_render]
+            px = lerp(a["px"], b["px"], w)
+            py = lerp(a["py"], b["py"], w)
+            trail.append((int(px), int(py)))
             for p, q in zip(trail[:-1], trail[1:]):
                 cv2.line(img, p, q, color, 2)
-            px, py = int(o["px"]), int(o["py"])
-            box = o.get("box")
-            if box is not None:
-                bx1, by1, bx2, by2 = [int(v) for v in box]
+            box_a, box_b = a.get("box"), b.get("box")
+            if box_a is not None and box_b is not None:
+                bx1, by1, bx2, by2 = (int(lerp(box_a[k], box_b[k], w)) for k in range(4))
                 cv2.rectangle(img, (bx1, by1), (bx2, by2), color, 2)
                 label_anchor = (bx1, max(20, by1 - 8))
             else:
-                label_anchor = (px + 8, py - 8)
-            cv2.circle(img, (px, py), 6, color, -1)
-            cv2.circle(img, (px, py), 6, (255, 255, 255), 1)
-            label = f"id{tid} {rec['cls']} {o.get('speed_kmh', 0):.0f}km/h"
+                label_anchor = (int(px) + 8, int(py) - 8)
+            cv2.circle(img, (int(px), int(py)), 6, color, -1)
+            cv2.circle(img, (int(px), int(py)), 6, (255, 255, 255), 1)
+            speed = lerp(float(a.get("speed_kmh", 0)), float(b.get("speed_kmh", 0)), w)
+            label = f"id{tid} {rec['cls']} {speed:.0f}km/h"
             cv2.putText(img, label, label_anchor, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 4)
             cv2.putText(img, label, label_anchor, cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
-        dt = float(times[i + 1] - times[i]) if i + 1 < len(times) else float(np.median(np.diff(times)))
+    med_dt = float(np.median(np.diff(times)))
+    for i, f in enumerate(frames):
+        base = cv2.imread(str(f))
+        t0 = float(times[i])
+        dt = float(times[i + 1] - times[i]) if i + 1 < len(times) else med_dt
         repeats = max(1, int(round(dt * playback_fps)))
-        for _ in range(repeats):
+        for k in range(repeats):
+            img = base.copy()
+            draw_at(img, t0 + dt * (k / repeats))
             writer.write(img)
     writer.release()
 
