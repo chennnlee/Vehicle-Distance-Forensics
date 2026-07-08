@@ -169,6 +169,14 @@ def main() -> None:
             tid = int(tid_s)
             if tid not in reported:
                 continue
+            # far_field trajectories are geometric noise, and tracks whose CI
+            # exceeds half their speed are mis-associations or erratic motion;
+            # drawing either on a metric map would lend them false credibility.
+            r = reported[tid]
+            if r.get("quality") == "far_field":
+                continue
+            if r.get("speed_ci_kmh", 0.0) > 0.5 * max(1e-9, r.get("speed_kmh", 0.0)):
+                continue
             hcol = int(rng.integers(0, 180))
             col = cv2.cvtColor(np.uint8([[[hcol, 220, 255]]]), cv2.COLOR_HSV2BGR)[0, 0]
             color = (int(col[0]), int(col[1]), int(col[2]))
@@ -181,7 +189,8 @@ def main() -> None:
             if pts:
                 r = reported[tid]
                 cv2.circle(bev, pts[-1], 5, color, -1)
-                label = f"id{tid} {r['speed_kmh']:.0f}km/h"
+                ci = r.get("speed_ci_kmh")
+                label = f"id{tid} {r['speed_kmh']:.0f}km/h" + (f" +-{ci:.0f}" if ci else "")
                 cv2.putText(bev, label, (pts[-1][0] + 6, pts[-1][1] - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 4)
                 cv2.putText(bev, label, (pts[-1][0] + 6, pts[-1][1] - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
 

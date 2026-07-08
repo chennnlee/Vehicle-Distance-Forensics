@@ -516,9 +516,9 @@ def main() -> None:
                     spec_d = MARKING_SPECS[result["identified_spec"]]["dash_m"]
                     entry["scale_if_same_spec"] = spec_d / med
                 sec_results.append(entry)
-    result["secondary_chains"] = [
-        {k: v for k, v in e.items() if k != "tips"} for e in sec_results
-    ]
+    # Keep the tip pixel coords: downstream video renderers draw every
+    # measured dash (primary green, secondary cyan) as on-screen evidence.
+    result["secondary_chains"] = sec_results
 
     canvas = image.copy()
     scale_for_draw = result.get("scale_factor")

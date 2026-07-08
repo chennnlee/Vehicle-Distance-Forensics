@@ -30,17 +30,36 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pointcloud-scale", type=float, required=True, help="Anchor-derived scale factor (e.g. from lane_dash_calibration).")
     parser.add_argument("--clock-roi", default="0,0,520,40", help="OSD clock region x1,y1,x2,y2 used to detect 1-second ticks for frame timing.")
     parser.add_argument("--fps", type=float, default=0.0, help="Known constant frame rate. When set, timestamps are i/fps and the OSD clock is not used (for re-encoded evidence videos without a reliable ticking clock).")
-    parser.add_argument("--yolo-model", default="checkpoints/yolov8m-seg.pt", help="Ultralytics model for track().")
+    parser.add_argument("--yolo-model", default="checkpoints/yolov8m-seg.pt", help="Ultralytics segmentation model.")
     parser.add_argument("--conf", type=float, default=0.3, help="Detection confidence threshold.")
     parser.add_argument("--out-dir", required=True, help="Output directory.")
     parser.add_argument("--min-track-frames", type=int, default=4, help="Minimum observations per track.")
     parser.add_argument("--min-track-seconds", type=float, default=2.0, help="Minimum track duration.")
     parser.add_argument("--min-path-m", type=float, default=5.0, help="Minimum path length in meters for a speed to be reported.")
+    parser.add_argument("--min-disp-m", type=float, default=5.0,
+                        help="Minimum NET start-to-end displacement in meters. Unlike path length, net displacement "
+                        "cannot be accumulated by bbox jitter, so this gate removes stationary vehicles that would "
+                        "otherwise 'walk' tens of meters of path while queueing at a red light.")
+    parser.add_argument("--max-sens-m-per-px", type=float, default=0.30,
+                        help="Far-field rejection: flag a track 'far_field' when the median ground-sensitivity of its "
+                        "observations exceeds this many meters per pixel. Near the horizon one pixel of detection "
+                        "noise moves the ray-plane intersection by meters, so no speed there can be trusted "
+                        "(lesson from case 1110822 where the culprit sat 10-30px below the horizon).")
+    parser.add_argument("--scale-cv", type=float, default=0.0,
+                        help="Relative uncertainty of the calibration scale (the lane-dash length CV); folded into "
+                        "each reported speed's +/- confidence interval.")
+    parser.add_argument("--anchors-json", default="",
+                        help="lane_dash_calibration.json path; its calibrated dashes are drawn in the rendered video "
+                        "(primary chain green, secondary chains cyan) so the scale's origin is visible on screen.")
+    parser.add_argument("--camera-label", default="", help="Camera/case name shown in the rendered video HUD.")
     parser.add_argument("--render-video", default="", help="Optional output mp4 path: per-frame boxes, recent trails, live speed labels, real-time playback.")
     parser.add_argument("--playback-fps", type=int, default=12, help="Playback fps of the rendered video; source frames are repeated to match real durations.")
     parser.add_argument("--time-scale", type=float, default=1.0,
                         help="Uniform fast-forward factor for realtime mode: playback = real time / k with constant "
                         "time flow (no rubber-banding), unlike native mode whose speed varies with source burstiness.")
+    parser.add_argument("--also-frame-video", default="",
+                        help="Optional second mp4: native-mode one-frame-per-source-frame with filename/t/dt burned "
+                        "in -- the forensic frame-stepping companion to the realtime video.")
     parser.add_argument("--playback-mode", choices=("realtime", "native"), default="realtime",
                         help="realtime: wall-clock pacing (frames repeat to fill their true duration; forensically faithful). "
                         "native: one output frame per source frame like the original stream player -- smooth but time-compressed.")
@@ -130,6 +149,42 @@ def build_ray_caster(ply_path: Path, scale: float, image_shape: tuple[int, int])
     return pixel_to_ground_m, ground
 
 
+SPEC_NOTE_EN = {"lane_line_4m": "4m lane dash", "guide_line_50cm": "0.5m guide line"}
+
+
+def load_calibration_anchors(path: Path) -> tuple[list[dict], str]:
+    """Turn a lane_dash_calibration.json into drawable video anchors.
+
+    Primary-chain dashes come out green with 'ref X.XXm (legal Ym)' labels;
+    secondary chains (independent lane lines that passed the CV gate) come out
+    cyan. Burning them into every frame makes the video self-documenting: the
+    viewer sees exactly which painted marks the metric scale came from.
+    """
+    d = json.loads(Path(path).read_text())
+    scale = d.get("scale_factor")
+    spec = d.get("identified_spec")
+    legal = None
+    if spec:
+        from lane_dash_calibration import MARKING_SPECS
+
+        legal = MARKING_SPECS[spec]["dash_m"]
+    anchors: list[dict] = []
+    for row in d.get("dashes", []):
+        length = row.get("length_3d_raw_m")
+        if length is None or scale is None:
+            continue
+        label = f"ref {length * scale:.2f}m (legal {legal:g}m)" if legal else f"ref {length * scale:.2f}m"
+        anchors.append({"p1": row["tip_near_px"], "p2": row["tip_far_px"], "label": label, "color": (0, 255, 0)})
+    for chain in d.get("secondary_chains", []):
+        # Junk chains (solid-line fragments, worn paint) show CV > 0.5;
+        # only stable chains are presented as on-screen evidence.
+        if chain.get("length_cv", 1.0) > 0.15 or scale is None:
+            continue
+        for tip_near, tip_far, length in chain.get("tips", []):
+            anchors.append({"p1": tip_near, "p2": tip_far, "label": f"{length * scale:.2f}m", "color": (255, 255, 0)})
+    return anchors, SPEC_NOTE_EN.get(spec, spec or "anchor")
+
+
 def _id_color(tid: int) -> tuple[int, int, int]:
     rng = np.random.default_rng(tid * 9973 + 7)
     h = int(rng.integers(0, 180))
@@ -150,6 +205,7 @@ def render_video(
     anchors: list | None = None,
     time_scale: float = 1.0,
     frame_info: bool = False,
+    hud: str = "",
 ) -> None:
     """Real-time annotated playback: each source frame is repeated to match its
     true duration (from OSD-clock timestamps), so vehicle motion in the output
@@ -158,6 +214,7 @@ def render_video(
     h, w = sample.shape[:2]
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     writer = cv2.VideoWriter(str(video_path), fourcc, playback_fps, (w, h))
+    font = cv2.FONT_HERSHEY_SIMPLEX
 
     # Sorted per-track observation arrays for time interpolation
     track_obs: dict[int, list[dict]] = {}
@@ -168,7 +225,29 @@ def render_video(
     def lerp(a: float, b: float, w: float) -> float:
         return a + (b - a) * w
 
-    def draw_anchors(img: np.ndarray) -> None:
+    def put_label(img: np.ndarray, text: str, x: float, y: float, color: tuple, fs: float = 0.6,
+                  placed: list | None = None) -> None:
+        # Labels must stay readable in a report video: clamp them inside the
+        # frame (edge anchors used to run off screen) and, when a placed-rect
+        # list is given, push colliding labels upward so queued vehicles do
+        # not print on top of each other.
+        (tw, th), _ = cv2.getTextSize(text, font, fs, 2)
+        x = int(min(max(2, x), img.shape[1] - tw - 2))
+        y = int(min(max(th + 4, y), img.shape[0] - 6))
+        if placed is not None:
+            for _ in range(8):
+                box = (x, y - th - 3, x + tw, y + 3)
+                if all(box[2] <= r[0] or box[0] >= r[2] or box[3] <= r[1] or box[1] >= r[3] for r in placed):
+                    break
+                y -= th + 10
+                if y < th + 4:
+                    y = th + 4
+                    break
+            placed.append((x, y - th - 3, x + tw, y + 3))
+        cv2.putText(img, text, (x, y), font, fs, (0, 0, 0), 4)
+        cv2.putText(img, text, (x, y), font, fs, color, 2)
+
+    def draw_anchors(img: np.ndarray, placed: list) -> None:
         # The calibration dashes ARE the measurement's ruler; showing them in
         # every frame lets a report viewer see where the scale comes from.
         if not anchors:
@@ -176,12 +255,23 @@ def render_video(
         for an in anchors:
             p1 = tuple(int(v) for v in an["p1"])
             p2 = tuple(int(v) for v in an["p2"])
-            cv2.line(img, p1, p2, (0, 255, 0), 3)
-            mid = ((p1[0] + p2[0]) // 2 + 8, (p1[1] + p2[1]) // 2)
-            cv2.putText(img, an["label"], mid, cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 4)
-            cv2.putText(img, an["label"], mid, cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 2)
+            color = an.get("color", (0, 255, 0))
+            cv2.line(img, p1, p2, color, 3)
+            if an.get("label"):
+                put_label(img, an["label"], (p1[0] + p2[0]) // 2 + 8, (p1[1] + p2[1]) // 2,
+                          color, fs=0.5, placed=placed)
 
-    def draw_at(img: np.ndarray, t_render: float) -> None:
+    def draw_hud(img: np.ndarray, t_render: float, extra: str = "") -> None:
+        if not hud and not extra:
+            return
+        text = "  ".join(s for s in (hud, f"t=+{t_render:.1f}s", extra) if s)
+        (tw, th), _ = cv2.getTextSize(text, font, 0.55, 2)
+        y0 = img.shape[0] - 14
+        overlay = img[y0 - th - 8: y0 + 8, 8: 24 + tw]
+        overlay[:] = (overlay.astype(np.int32) * 3 // 10).astype(np.uint8)  # darken strip for contrast
+        cv2.putText(img, text, (16, y0), font, 0.55, (255, 255, 255), 2)
+
+    def draw_at(img: np.ndarray, t_render: float, placed: list) -> None:
         # Source frames arrive at ~1-4fps, but we know each track's positions
         # at consecutive observations, so annotations are interpolated to the
         # playback timestamp: boxes glide between detections instead of
@@ -204,8 +294,21 @@ def render_video(
                 span = b["t"] - a["t"]
                 w = 0.0 if span <= 1e-9 else (t_render - a["t"]) / span
 
-            color = _id_color(tid)
             rec = tracks[tid]
+            row = reported.get(tid, {})
+            quality = row.get("quality", "ok")
+            # A far-field track's positions are geometric noise (meters per
+            # pixel); printing a km/h number there would be fabrication, so it
+            # is drawn gray and explicitly labeled unreliable instead.
+            far_field = quality == "far_field"
+            # Same treatment when the fit CI exceeds half the speed itself:
+            # that is the statistical signature of a mis-associated track
+            # (e.g. two vehicles stitched across carriageways) or of motion
+            # too erratic for any single number to represent.
+            fit_speed = float(row.get("speed_kmh", 0.0))
+            fit_ci = float(row.get("speed_ci_kmh", 0.0))
+            uncertain = fit_speed > 0 and fit_ci > 0.5 * fit_speed
+            color = (150, 150, 150) if (far_field or uncertain) else _id_color(tid)
             trail = [(int(p["px"]), int(p["py"])) for p in obs if t_render - trail_seconds <= p["t"] <= t_render]
             px = lerp(a["px"], b["px"], w)
             py = lerp(a["py"], b["py"], w)
@@ -216,15 +319,23 @@ def render_video(
             if box_a is not None and box_b is not None:
                 bx1, by1, bx2, by2 = (int(lerp(box_a[k], box_b[k], w)) for k in range(4))
                 cv2.rectangle(img, (bx1, by1), (bx2, by2), color, 2)
-                label_anchor = (bx1, max(20, by1 - 8))
+                label_anchor = (bx1, by1 - 8)
             else:
                 label_anchor = (int(px) + 8, int(py) - 8)
             cv2.circle(img, (int(px), int(py)), 6, color, -1)
             cv2.circle(img, (int(px), int(py)), 6, (255, 255, 255), 1)
-            speed = lerp(float(a.get("speed_kmh", 0)), float(b.get("speed_kmh", 0)), w)
-            label = f"id{tid} {rec['cls']} {speed:.0f}km/h"
-            cv2.putText(img, label, label_anchor, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 4)
-            cv2.putText(img, label, label_anchor, cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+            if far_field:
+                label = f"id{tid} {rec['cls']} far-range: no speed"
+            elif uncertain:
+                # Show the fitted speed WITH its interval instead of the live
+                # windowed speed: a number this uncertain must not look alive.
+                label = f"id{tid} {rec['cls']} {fit_speed:.0f}+-{fit_ci:.0f}km/h?"
+            else:
+                speed = lerp(float(a.get("speed_kmh", 0)), float(b.get("speed_kmh", 0)), w)
+                # "~" marks tracks whose overall motion was not uniform
+                # (fit rmse > 1.5 m): the number is a rougher average.
+                label = f"id{tid} {rec['cls']} {speed:.0f}km/h" + ("~" if quality == "nonuniform_motion" else "")
+            put_label(img, label, label_anchor[0], label_anchor[1], color, fs=0.6, placed=placed)
 
     med_dt = float(np.median(np.diff(times)))
     if mode == "native":
@@ -236,19 +347,19 @@ def render_video(
         speedup = span / max(1e-9, len(frames) / playback_fps)
         for i, f in enumerate(frames):
             img = cv2.imread(str(f))
-            draw_anchors(img)
-            draw_at(img, float(times[i]))
+            placed: list = []
+            draw_anchors(img, placed)
+            draw_at(img, float(times[i]), placed)
             if frame_info:
                 dt_i = float(times[i] - times[i - 1]) if i > 0 else 0.0
                 info = f"{f.name}  frame#{i:04d}  t={float(times[i]-times[0]):+8.3f}s  dt={dt_i:.3f}s"
                 cv2.putText(img, info, (16, 72), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 0), 5)
                 cv2.putText(img, info, (16, 72), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 255), 2)
-            note = f"native playback (~x{speedup:.1f} time-compressed)"
-            cv2.putText(img, note, (16, img.shape[0] - 16), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 4)
-            cv2.putText(img, note, (16, img.shape[0] - 16), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
+            draw_hud(img, float(times[i] - times[0]), extra=f"native playback (~x{speedup:.1f} time-compressed)")
             writer.write(img)
         writer.release()
         return
+    t_start = float(times[0])
     for i, f in enumerate(frames):
         base = cv2.imread(str(f))
         t0 = float(times[i])
@@ -256,12 +367,12 @@ def render_video(
         repeats = max(1, int(round(dt * playback_fps / max(1e-6, time_scale))))
         for k in range(repeats):
             img = base.copy()
-            draw_anchors(img)
-            draw_at(img, t0 + dt * (k / repeats))
-            if time_scale != 1.0:
-                note = f"x{time_scale:g} fast-forward (uniform time)"
-                cv2.putText(img, note, (16, img.shape[0] - 16), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 4)
-                cv2.putText(img, note, (16, img.shape[0] - 16), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
+            t_render = t0 + dt * (k / repeats)
+            placed = []
+            draw_anchors(img, placed)
+            draw_at(img, t_render, placed)
+            extra = f"x{time_scale:g} fast-forward (uniform time)" if time_scale != 1.0 else ""
+            draw_hud(img, t_render - t_start, extra=extra)
             writer.write(img)
     writer.release()
 
@@ -333,8 +444,15 @@ def main() -> None:
                 gp = pixel_to_ground_m(gx, gy)
                 if gp is None:
                     continue
+                # Geometric sensitivity: how far the ground point moves per
+                # pixel of vertical detection noise. Near the horizon this
+                # explodes (meters per pixel) and any speed becomes fiction;
+                # the per-track median is reported and gates the far_field flag.
+                gp_up = pixel_to_ground_m(gx, gy - 1.0)
+                sens = float(np.linalg.norm(gp_up - gp)) if gp_up is not None else float("inf")
                 dets.append({"cls": VEHICLE_CLASSES[int(cls)], "px": float(gx), "py": float(gy),
-                             "box": [float(x1), float(y1), float(x2), float(y2)], "pos": gp})
+                             "box": [float(x1), float(y1), float(x2), float(y2)],
+                             "bh": float(y2 - y1), "sens": sens, "pos": gp})
 
         # Predict each active track forward and build a gated cost matrix,
         # then solve globally with Hungarian assignment. Greedy NN caused ID
@@ -355,6 +473,12 @@ def main() -> None:
                 gate = max(4.0, speed * dt * 1.6 + 2.0)
             for di, det in enumerate(dets):
                 if det["cls"] != tr["cls"]:
+                    continue
+                # Apparent-size consistency: a vehicle cannot halve or double
+                # its bbox height between consecutive frames. This blocks the
+                # cross-carriageway stitches (near car matched to a far car)
+                # that the wide 26 m bootstrap gate otherwise allows.
+                if det["bh"] / max(1e-6, tr["bh"]) > 2.2 or det["bh"] / max(1e-6, tr["bh"]) < 0.45:
                     continue
                 disp = det["pos"] - tr["pos"]
                 disp_n = float(np.linalg.norm(disp))
@@ -396,6 +520,7 @@ def main() -> None:
                     # EMA keeps velocity stable against bottom-pixel jitter
                     tr["vel"] = 0.5 * tr["vel"] + 0.5 * inst_vel
             tr["pos"] = det["pos"]
+            tr["bh"] = det["bh"]
             tr["last_t"] = t_now
             tr["n_obs"] += 1
             # Display speed over a >=0.6s baseline, not adjacent frames: at
@@ -413,7 +538,7 @@ def main() -> None:
                 disp_speed = float(np.linalg.norm(tr["vel"])) * 3.6 if tr["n_obs"] > 3 else 0.0
             hist.append(
                 {"frame": i, "t": t_now, "px": det["px"], "py": det["py"], "box": det["box"],
-                 "pos_m": det["pos"].tolist(), "speed_kmh": disp_speed}
+                 "pos_m": det["pos"].tolist(), "speed_kmh": disp_speed, "sens": det["sens"]}
             )
 
         for di, det in enumerate(dets):
@@ -421,10 +546,11 @@ def main() -> None:
                 continue
             tid = next_id
             next_id += 1
-            active.append({"id": tid, "cls": det["cls"], "pos": det["pos"], "vel": np.zeros(3), "last_t": t_now, "n_obs": 1})
+            active.append({"id": tid, "cls": det["cls"], "pos": det["pos"], "vel": np.zeros(3),
+                           "bh": det["bh"], "last_t": t_now, "n_obs": 1})
             tracks[tid] = {"cls": det["cls"], "obs": [
                 {"frame": i, "t": t_now, "px": det["px"], "py": det["py"], "box": det["box"],
-                 "pos_m": det["pos"].tolist(), "speed_kmh": 0.0}
+                 "pos_m": det["pos"].tolist(), "speed_kmh": 0.0, "sens": det["sens"]}
             ]}
 
         active = [tr for tr in active if t_now - tr["last_t"] <= 3.0]
@@ -442,6 +568,12 @@ def main() -> None:
         path_len = float(np.sum(np.linalg.norm(np.diff(P, axis=0), axis=1)))
         if path_len < args.min_path_m:
             continue
+        # NET displacement gate: a queueing vehicle's bbox jitter integrates
+        # tens of meters of "path" while it goes nowhere; start-to-end
+        # displacement cannot be gamed that way.
+        disp_m = float(np.linalg.norm(P[-1] - P[0]))
+        if disp_m < args.min_disp_m:
+            continue
         # Constant-velocity linear fit per axis: robust to per-frame pixel jitter,
         # and its residual tells us whether the motion was actually uniform.
         A = np.column_stack([t - t[0], np.ones(len(t))])
@@ -453,20 +585,49 @@ def main() -> None:
             residuals.append(P[:, axis] - A @ coeff)
         speed_ms = float(np.linalg.norm(vel))
         rmse = float(np.sqrt(np.mean(np.concatenate(residuals) ** 2)))
+
+        # 95% CI on the speed: slope standard error from the fit residuals,
+        # projected onto the velocity direction, combined in quadrature with
+        # the calibration-scale uncertainty (which multiplies the whole speed).
+        t_c = t - t.mean()
+        s_tt = float(np.sum(t_c ** 2))
+        var_v = 0.0
+        if s_tt > 1e-9 and len(t) > 2:
+            v_hat = np.array(vel)
+            v_norm = max(1e-9, float(np.linalg.norm(v_hat)))
+            for axis in range(3):
+                se2 = float(np.sum(residuals[axis] ** 2)) / max(1, len(t) - 2) / s_tt
+                var_v += (v_hat[axis] / v_norm) ** 2 * se2
+        ci_ms = float(np.hypot(1.96 * np.sqrt(var_v), 1.96 * speed_ms * args.scale_cv))
+
+        sens_arr = np.array([o.get("sens", 0.0) for o in obs], dtype=np.float64)
+        sens_med = float(np.median(sens_arr[np.isfinite(sens_arr)])) if np.isfinite(sens_arr).any() else 99.0
+        if not np.isfinite(sens_med):
+            sens_med = 99.0
+        if sens_med > args.max_sens_m_per_px or not np.isfinite(sens_arr).all():
+            quality = "far_field"
+        elif rmse < 1.5:
+            quality = "ok"
+        else:
+            quality = "nonuniform_motion"
         rows.append({
             "track_id": tid,
             "class": rec["cls"],
             "n_frames": len(obs),
             "duration_s": round(duration, 2),
             "path_m": round(path_len, 1),
+            "disp_m": round(disp_m, 1),
             "speed_kmh": round(speed_ms * 3.6, 1),
+            "speed_ci_kmh": round(ci_ms * 3.6, 1),
             "fit_rmse_m": round(rmse, 2),
-            "quality": "ok" if rmse < 1.5 else "nonuniform_motion",
+            "sens_m_per_px": round(min(sens_med, 99.0), 3),
+            "quality": quality,
         })
 
     csv_path = out_dir / "speeds.csv"
     with csv_path.open("w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=["track_id", "class", "n_frames", "duration_s", "path_m", "speed_kmh", "fit_rmse_m", "quality"])
+        writer = csv.DictWriter(fh, fieldnames=["track_id", "class", "n_frames", "duration_s", "path_m", "disp_m",
+                                                "speed_kmh", "speed_ci_kmh", "fit_rmse_m", "sens_m_per_px", "quality"])
         writer.writeheader()
         writer.writerows(rows)
 
@@ -489,7 +650,12 @@ def main() -> None:
         for p in pts:
             cv2.circle(canvas, tuple(p), 3, color, -1)
         r = reported[tid]
-        label = f"id{tid} {r['class']} {r['speed_kmh']:.0f}km/h"
+        if r["quality"] == "far_field":
+            label = f"id{tid} {r['class']} far-range: no speed"
+        elif r["speed_ci_kmh"] > 0.5 * max(1e-9, r["speed_kmh"]):
+            label = f"id{tid} {r['class']} {r['speed_kmh']:.0f}±{r['speed_ci_kmh']:.0f}km/h?"
+        else:
+            label = f"id{tid} {r['class']} {r['speed_kmh']:.0f}±{r['speed_ci_kmh']:.0f}km/h"
         anchor = pts[-1]
         cv2.putText(canvas, label, (anchor[0] + 8, anchor[1] - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 4)
         cv2.putText(canvas, label, (anchor[0] + 8, anchor[1] - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
@@ -500,12 +666,45 @@ def main() -> None:
         video_path = Path(args.render_video)
         if not video_path.is_absolute():
             video_path = out_dir / video_path
-        render_video(frames, times, tracks, reported, video_path, args.playback_fps, mode=args.playback_mode, time_scale=args.time_scale)
+        anchors: list[dict] = []
+        hud = args.camera_label
+        if args.anchors_json:
+            anchors, spec_note = load_calibration_anchors(Path(args.anchors_json))
+            hud_scale = f"scale {args.pointcloud_scale:.3f} ({spec_note}"
+            hud_scale += f", CV {args.scale_cv * 100:.0f}%)" if args.scale_cv > 0 else ")"
+            hud = f"{hud}  {hud_scale}" if hud else hud_scale
+        render_video(frames, times, tracks, reported, video_path, args.playback_fps,
+                     mode=args.playback_mode, anchors=anchors, time_scale=args.time_scale, hud=hud)
         print(f"saved: {video_path}")
+        rendered = [video_path]
+        if args.also_frame_video:
+            frame_video_path = Path(args.also_frame_video)
+            if not frame_video_path.is_absolute():
+                frame_video_path = out_dir / frame_video_path
+            render_video(frames, times, tracks, reported, frame_video_path, args.playback_fps,
+                         mode="native", anchors=anchors, frame_info=True, hud=hud)
+            print(f"saved: {frame_video_path}")
+            rendered.append(frame_video_path)
+        # mp4v is what OpenCV can write, but browsers/players want H.264;
+        # convert on the spot when ffmpeg is available.
+        import shutil
+        import subprocess
+
+        if shutil.which("ffmpeg"):
+            for vp in rendered:
+                h264_path = vp.with_name(vp.stem + "_h264.mp4")
+                proc = subprocess.run(
+                    ["ffmpeg", "-y", "-v", "error", "-i", str(vp),
+                     "-c:v", "libopenh264", "-b:v", "6M", "-pix_fmt", "yuv420p", str(h264_path)],
+                    capture_output=True, text=True)
+                if proc.returncode == 0:
+                    print(f"saved: {h264_path}")
 
     print(f"tracks_total={len(tracks)} reported={len(rows)}")
     for r in rows:
-        print(f"  id{r['track_id']:>3} {r['class']:10s} {r['speed_kmh']:6.1f} km/h  ({r['n_frames']}f {r['duration_s']}s {r['path_m']}m rmse={r['fit_rmse_m']} {r['quality']})")
+        print(f"  id{r['track_id']:>3} {r['class']:10s} {r['speed_kmh']:6.1f}±{r['speed_ci_kmh']:4.1f} km/h  "
+              f"({r['n_frames']}f {r['duration_s']}s disp={r['disp_m']}m rmse={r['fit_rmse_m']} "
+              f"sens={r['sens_m_per_px']} {r['quality']})")
     print(f"saved: {csv_path}")
     print(f"saved: {vis_path}")
 
