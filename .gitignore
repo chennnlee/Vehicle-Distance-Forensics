@@ -70,3 +70,7 @@ tools/ml-sharp/
 # Personal / non-code documents
 2025-補助大專學生研究計畫申請書-徐鐽睿.pdf
 *:Zone.Identifier
+
+# Secrets / API credentials
+.env
+.env.*
