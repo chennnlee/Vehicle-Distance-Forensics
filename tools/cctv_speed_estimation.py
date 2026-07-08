@@ -38,6 +38,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-path-m", type=float, default=5.0, help="Minimum path length in meters for a speed to be reported.")
     parser.add_argument("--render-video", default="", help="Optional output mp4 path: per-frame boxes, recent trails, live speed labels, real-time playback.")
     parser.add_argument("--playback-fps", type=int, default=12, help="Playback fps of the rendered video; source frames are repeated to match real durations.")
+    parser.add_argument("--time-scale", type=float, default=1.0,
+                        help="Uniform fast-forward factor for realtime mode: playback = real time / k with constant "
+                        "time flow (no rubber-banding), unlike native mode whose speed varies with source burstiness.")
     parser.add_argument("--playback-mode", choices=("realtime", "native"), default="realtime",
                         help="realtime: wall-clock pacing (frames repeat to fill their true duration; forensically faithful). "
                         "native: one output frame per source frame like the original stream player -- smooth but time-compressed.")
@@ -145,6 +148,7 @@ def render_video(
     trail_seconds: float = 6.0,
     mode: str = "realtime",
     anchors: list | None = None,
+    time_scale: float = 1.0,
 ) -> None:
     """Real-time annotated playback: each source frame is repeated to match its
     true duration (from OSD-clock timestamps), so vehicle motion in the output
@@ -243,11 +247,15 @@ def render_video(
         base = cv2.imread(str(f))
         t0 = float(times[i])
         dt = float(times[i + 1] - times[i]) if i + 1 < len(times) else med_dt
-        repeats = max(1, int(round(dt * playback_fps)))
+        repeats = max(1, int(round(dt * playback_fps / max(1e-6, time_scale))))
         for k in range(repeats):
             img = base.copy()
             draw_anchors(img)
             draw_at(img, t0 + dt * (k / repeats))
+            if time_scale != 1.0:
+                note = f"x{time_scale:g} fast-forward (uniform time)"
+                cv2.putText(img, note, (16, img.shape[0] - 16), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 4)
+                cv2.putText(img, note, (16, img.shape[0] - 16), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
             writer.write(img)
     writer.release()
 
@@ -298,14 +306,28 @@ def main() -> None:
         if result.boxes is not None:
             boxes = result.boxes.xyxy.cpu().numpy()
             clss = result.boxes.cls.cpu().numpy().astype(int)
-            for box, cls in zip(boxes, clss):
+            mask_polys = result.masks.xy if getattr(result, "masks", None) is not None else None
+            for di_raw, (box, cls) in enumerate(zip(boxes, clss)):
                 if int(cls) not in VEHICLE_CLASSES:
                     continue
                 x1, y1, x2, y2 = box
-                gp = pixel_to_ground_m((x1 + x2) / 2.0, y2)
+                # Ground-contact estimate: median x over the lowest 12% of the
+                # segmentation silhouette (where tires meet road). The bbox
+                # bottom-center is only a fallback -- boxes wobble with
+                # mirrors/shadows while the mask bottom tracks the wheels.
+                gx, gy = (x1 + x2) / 2.0, y2
+                if mask_polys is not None and di_raw < len(mask_polys):
+                    poly = mask_polys[di_raw]
+                    if poly is not None and len(poly) >= 3:
+                        ys = poly[:, 1]
+                        band = ys >= ys.max() - max(3.0, 0.12 * (y2 - y1))
+                        if band.sum() >= 2:
+                            gx = float(np.median(poly[band, 0]))
+                            gy = float(ys.max())
+                gp = pixel_to_ground_m(gx, gy)
                 if gp is None:
                     continue
-                dets.append({"cls": VEHICLE_CLASSES[int(cls)], "px": float((x1 + x2) / 2), "py": float(y2),
+                dets.append({"cls": VEHICLE_CLASSES[int(cls)], "px": float(gx), "py": float(gy),
                              "box": [float(x1), float(y1), float(x2), float(y2)], "pos": gp})
 
         # Predict each active track forward and build a gated cost matrix,
@@ -472,7 +494,7 @@ def main() -> None:
         video_path = Path(args.render_video)
         if not video_path.is_absolute():
             video_path = out_dir / video_path
-        render_video(frames, times, tracks, reported, video_path, args.playback_fps, mode=args.playback_mode)
+        render_video(frames, times, tracks, reported, video_path, args.playback_fps, mode=args.playback_mode, time_scale=args.time_scale)
         print(f"saved: {video_path}")
 
     print(f"tracks_total={len(tracks)} reported={len(rows)}")
