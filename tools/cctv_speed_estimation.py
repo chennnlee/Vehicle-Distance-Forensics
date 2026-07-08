@@ -35,6 +35,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-track-frames", type=int, default=4, help="Minimum observations per track.")
     parser.add_argument("--min-track-seconds", type=float, default=2.0, help="Minimum track duration.")
     parser.add_argument("--min-path-m", type=float, default=5.0, help="Minimum path length in meters for a speed to be reported.")
+    parser.add_argument("--render-video", default="", help="Optional output mp4 path: per-frame boxes, recent trails, live speed labels, real-time playback.")
+    parser.add_argument("--playback-fps", type=int, default=12, help="Playback fps of the rendered video; source frames are repeated to match real durations.")
     return parser.parse_args()
 
 
@@ -114,6 +116,68 @@ def build_ray_caster(ply_path: Path, scale: float, image_shape: tuple[int, int])
     return pixel_to_ground_m, ground
 
 
+def _id_color(tid: int) -> tuple[int, int, int]:
+    rng = np.random.default_rng(tid * 9973 + 7)
+    h = int(rng.integers(0, 180))
+    hsv = np.uint8([[[h, 200, 255]]])
+    b, g, r = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)[0, 0]
+    return int(b), int(g), int(r)
+
+
+def render_video(
+    frames: list[Path],
+    times: np.ndarray,
+    tracks: dict[int, dict],
+    reported: dict[int, dict],
+    video_path: Path,
+    playback_fps: int,
+    trail_seconds: float = 6.0,
+) -> None:
+    """Real-time annotated playback: each source frame is repeated to match its
+    true duration (from OSD-clock timestamps), so vehicle motion in the output
+    plays at wall-clock speed even though the NVR stream is ~1-2 fps."""
+    sample = cv2.imread(str(frames[0]))
+    h, w = sample.shape[:2]
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    writer = cv2.VideoWriter(str(video_path), fourcc, playback_fps, (w, h))
+
+    # Index observations by frame for O(1) lookup during rendering
+    obs_by_frame: dict[int, list[tuple[int, dict]]] = {}
+    for tid, rec in tracks.items():
+        if tid not in reported:
+            continue
+        for o in rec["obs"]:
+            obs_by_frame.setdefault(o["frame"], []).append((tid, o))
+
+    last_seen: dict[int, dict] = {}
+    for i, f in enumerate(frames):
+        img = cv2.imread(str(f))
+        t_now = float(times[i])
+        for tid, o in obs_by_frame.get(i, []):
+            last_seen[tid] = o
+
+        for tid, o in list(last_seen.items()):
+            if t_now - o["t"] > 2.5:
+                del last_seen[tid]
+                continue
+            color = _id_color(tid)
+            rec = tracks[tid]
+            trail = [(int(p["px"]), int(p["py"])) for p in rec["obs"] if t_now - trail_seconds <= p["t"] <= t_now]
+            for p, q in zip(trail[:-1], trail[1:]):
+                cv2.line(img, p, q, color, 2)
+            px, py = int(o["px"]), int(o["py"])
+            cv2.circle(img, (px, py), 5, color, -1)
+            label = f"id{tid} {rec['cls']} {o.get('speed_kmh', 0):.0f}km/h"
+            cv2.putText(img, label, (px + 8, py - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 4)
+            cv2.putText(img, label, (px + 8, py - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+
+        dt = float(times[i + 1] - times[i]) if i + 1 < len(times) else float(np.median(np.diff(times)))
+        repeats = max(1, int(round(dt * playback_fps)))
+        for _ in range(repeats):
+            writer.write(img)
+    writer.release()
+
+
 def main() -> None:
     args = parse_args()
     frames_dir = Path(args.frames_dir)
@@ -166,29 +230,51 @@ def main() -> None:
                     continue
                 dets.append({"cls": VEHICLE_CLASSES[int(cls)], "px": float((x1 + x2) / 2), "py": float(y2), "pos": gp})
 
-        # Predict each active track forward, then greedy nearest-neighbor match
-        pairs = []
+        # Predict each active track forward and build a gated cost matrix,
+        # then solve globally with Hungarian assignment. Greedy NN caused ID
+        # jumps in dense queues: a closer *wrong* detection could steal a
+        # track before the right pairing was considered.
+        BIG = 1e6
+        cost = np.full((len(active), len(dets)), BIG)
         for ti, tr in enumerate(active):
             dt = t_now - tr["last_t"]
             pred = tr["pos"] + tr["vel"] * dt
+            speed = float(np.linalg.norm(tr["vel"]))
             if tr["n_obs"] == 1:
                 # Bootstrap: velocity is still unknown, so the gate must cover
                 # the fastest plausible urban vehicle (~90 km/h = 25 m/s), or a
                 # fast mover can never be matched to its own second detection.
                 gate = max(6.0, 26.0 * dt)
             else:
-                gate = max(4.0, float(np.linalg.norm(tr["vel"])) * dt * 1.6 + 2.0)
+                gate = max(4.0, speed * dt * 1.6 + 2.0)
             for di, det in enumerate(dets):
                 if det["cls"] != tr["cls"]:
                     continue
+                disp = det["pos"] - tr["pos"]
+                disp_n = float(np.linalg.norm(disp))
+                # Physical sanity: no urban vehicle does >135 km/h between frames
+                if dt > 1e-6 and disp_n / dt > 38.0:
+                    continue
+                # Direction consistency: an established moving track must not
+                # match a detection behind it -- that is what stitched
+                # opposite-carriageway vehicles together in v1.
+                if tr["n_obs"] >= 3 and speed > 3.0 and disp_n > 3.0:
+                    cos_a = float(np.dot(tr["vel"], disp)) / max(1e-9, speed * disp_n)
+                    if cos_a < 0.0:
+                        continue
                 dist = float(np.linalg.norm(det["pos"] - pred))
                 if dist < gate:
-                    pairs.append((dist, ti, di))
-        pairs.sort()
+                    cost[ti, di] = dist
+
         used_t, used_d = set(), set()
-        for dist, ti, di in pairs:
-            if ti in used_t or di in used_d:
-                continue
+        if len(active) and len(dets):
+            from scipy.optimize import linear_sum_assignment
+
+            rr, cc = linear_sum_assignment(cost)
+            matched = [(ti, di) for ti, di in zip(rr, cc) if cost[ti, di] < BIG]
+        else:
+            matched = []
+        for ti, di in matched:
             used_t.add(ti)
             used_d.add(di)
             tr = active[ti]
@@ -207,7 +293,8 @@ def main() -> None:
             tr["last_t"] = t_now
             tr["n_obs"] += 1
             tracks[tr["id"]]["obs"].append(
-                {"frame": i, "t": t_now, "px": det["px"], "py": det["py"], "pos_m": det["pos"].tolist()}
+                {"frame": i, "t": t_now, "px": det["px"], "py": det["py"], "pos_m": det["pos"].tolist(),
+                 "speed_kmh": float(np.linalg.norm(tr["vel"])) * 3.6}
             )
 
         for di, det in enumerate(dets):
@@ -217,7 +304,8 @@ def main() -> None:
             next_id += 1
             active.append({"id": tid, "cls": det["cls"], "pos": det["pos"], "vel": np.zeros(3), "last_t": t_now, "n_obs": 1})
             tracks[tid] = {"cls": det["cls"], "obs": [
-                {"frame": i, "t": t_now, "px": det["px"], "py": det["py"], "pos_m": det["pos"].tolist()}
+                {"frame": i, "t": t_now, "px": det["px"], "py": det["py"], "pos_m": det["pos"].tolist(),
+                 "speed_kmh": 0.0}
             ]}
 
         active = [tr for tr in active if t_now - tr["last_t"] <= 3.0]
@@ -288,6 +376,13 @@ def main() -> None:
         cv2.putText(canvas, label, (anchor[0] + 8, anchor[1] - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
     vis_path = out_dir / "speed_overlay.png"
     cv2.imwrite(str(vis_path), canvas)
+
+    if args.render_video:
+        video_path = Path(args.render_video)
+        if not video_path.is_absolute():
+            video_path = out_dir / video_path
+        render_video(frames, times, tracks, reported, video_path, args.playback_fps)
+        print(f"saved: {video_path}")
 
     print(f"tracks_total={len(tracks)} reported={len(rows)}")
     for r in rows:
