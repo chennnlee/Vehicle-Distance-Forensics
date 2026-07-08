@@ -149,6 +149,7 @@ def render_video(
     mode: str = "realtime",
     anchors: list | None = None,
     time_scale: float = 1.0,
+    frame_info: bool = False,
 ) -> None:
     """Real-time annotated playback: each source frame is repeated to match its
     true duration (from OSD-clock timestamps), so vehicle motion in the output
@@ -237,6 +238,11 @@ def render_video(
             img = cv2.imread(str(f))
             draw_anchors(img)
             draw_at(img, float(times[i]))
+            if frame_info:
+                dt_i = float(times[i] - times[i - 1]) if i > 0 else 0.0
+                info = f"{f.name}  frame#{i:04d}  t={float(times[i]-times[0]):+8.3f}s  dt={dt_i:.3f}s"
+                cv2.putText(img, info, (16, 72), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 0), 5)
+                cv2.putText(img, info, (16, 72), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 255), 2)
             note = f"native playback (~x{speedup:.1f} time-compressed)"
             cv2.putText(img, note, (16, img.shape[0] - 16), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 4)
             cv2.putText(img, note, (16, img.shape[0] - 16), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
