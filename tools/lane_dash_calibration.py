@@ -142,6 +142,70 @@ def sample_3d(
     return np.median(points_xyz[near], axis=0), n
 
 
+def fit_ground_plane_raw(
+    points_xyz: np.ndarray,
+    u: np.ndarray,
+    v: np.ndarray,
+    roi_xyxy: tuple[int, int, int, int],
+    iterations: int = 240,
+) -> dict[str, float] | None:
+    """RANSAC-fit y = a*x + b*z + c on points projecting into the ROI.
+
+    Thresholds are proportional to scene depth because SHARP's raw unit scale
+    varies per camera (the fixed-FOV assumption); a fixed metric threshold
+    would be wrong on cameras where raw units are 2-3x off.
+    """
+    x1, y1, x2, y2 = roi_xyxy
+    cand = (
+        np.isfinite(u)
+        & (u >= x1) & (u < x2) & (v >= y1) & (v < y2)
+        & np.isfinite(points_xyz).all(axis=1)
+    )
+    sample = points_xyz[cand]
+    if sample.shape[0] < 200:
+        return None
+    if sample.shape[0] > 60000:
+        rng0 = np.random.default_rng(7)
+        sample = sample[rng0.choice(sample.shape[0], 60000, replace=False)]
+
+    med_depth = float(np.median(sample[:, 2]))
+    thr = 0.012 * med_depth
+    rng = np.random.default_rng(114)
+    best_inliers = None
+    best_count = 0
+    for _ in range(iterations):
+        idx = rng.choice(sample.shape[0], size=3, replace=False)
+        pts = sample[idx]
+        design = np.column_stack([pts[:, 0], pts[:, 2], np.ones(3)])
+        try:
+            coeff, *_ = np.linalg.lstsq(design, pts[:, 1], rcond=None)
+        except np.linalg.LinAlgError:
+            continue
+        res = np.abs(sample[:, 1] - (coeff[0] * sample[:, 0] + coeff[1] * sample[:, 2] + coeff[2]))
+        inl = res <= thr
+        cnt = int(inl.sum())
+        if cnt > best_count:
+            best_count, best_inliers = cnt, inl
+    if best_inliers is None or best_count < 100:
+        return None
+    pts = sample[best_inliers]
+    design = np.column_stack([pts[:, 0], pts[:, 2], np.ones(pts.shape[0])])
+    coeff, *_ = np.linalg.lstsq(design, pts[:, 1], rcond=None)
+    res = np.abs(pts[:, 1] - design @ coeff)
+    return {
+        "a": float(coeff[0]),
+        "b": float(coeff[1]),
+        "c": float(coeff[2]),
+        "residual_median": float(np.median(res)),
+        "median_depth": med_depth,
+        "inlier_ratio": float(best_count / sample.shape[0]),
+    }
+
+
+def height_above_plane(p: np.ndarray, gp: dict[str, float]) -> float:
+    return abs(float(p[1] - (gp["a"] * p[0] + gp["b"] * p[2] + gp["c"])))
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Estimate a SHARP point-cloud scale factor from legally-specified lane dash lengths, "
@@ -227,7 +291,17 @@ def main() -> None:
     u = np.where(valid, fx * (points_xyz[:, 0] / z) + cx, np.nan)
     v = np.where(valid, fy * (points_xyz[:, 1] / z) + cy, np.nan)
 
+    # Road paint lies on the ground plane; railings, poles, and bus-shelter
+    # frames -- the main false positives -- sit well above it. Fit the plane
+    # from the whole ROI's points, then drop any "dash" whose tips are
+    # elevated. This is the strongest available cue because it uses 3D
+    # geometry rather than appearance.
+    ground = fit_ground_plane_raw(points_xyz, u, v, (x1, y1, x2, y2))
+    result["ground_plane"] = ground
+
     dash_rows = []
+    rejected_rows = []
+    survivors = []
     lengths = []
     for seg in chain:
         radius = max(3.0, seg.length_px * 0.10)
@@ -242,25 +316,39 @@ def main() -> None:
             "sample_counts": [n_near, n_far],
             "length_3d_raw_m": None,
             "depth_raw_m": None,
+            "height_above_ground_raw": None,
         }
-        if p_near is not None and p_far is not None:
-            row["length_3d_raw_m"] = float(np.linalg.norm(p_far - p_near))
-            row["depth_raw_m"] = float((p_near[2] + p_far[2]) / 2.0)
-            lengths.append(row["length_3d_raw_m"])
+        if p_near is None or p_far is None:
+            rejected_rows.append({**row, "rejected": "no_3d_samples"})
+            continue
+        row["length_3d_raw_m"] = float(np.linalg.norm(p_far - p_near))
+        row["depth_raw_m"] = float((p_near[2] + p_far[2]) / 2.0)
+        if ground is not None:
+            h = max(height_above_plane(p_near, ground), height_above_plane(p_far, ground))
+            row["height_above_ground_raw"] = h
+            h_thr = max(2.5 * ground["residual_median"], 0.02 * ground["median_depth"])
+            if h > h_thr:
+                rejected_rows.append({**row, "rejected": "off_ground"})
+                continue
         dash_rows.append(row)
+        survivors.append(seg)
+        lengths.append(row["length_3d_raw_m"])
 
     gaps = []
-    for i in range(len(chain) - 1):
-        pa, _ = sample_3d(points_xyz, u, v, *chain[i].tip_far, 5.0)
-        pb, _ = sample_3d(points_xyz, u, v, *chain[i + 1].tip_near, 5.0)
+    for i in range(len(survivors) - 1):
+        pa, _ = sample_3d(points_xyz, u, v, *survivors[i].tip_far, 5.0)
+        pb, _ = sample_3d(points_xyz, u, v, *survivors[i + 1].tip_near, 5.0)
         if pa is not None and pb is not None:
             gaps.append(float(np.linalg.norm(pb - pa)))
 
     result["dashes"] = dash_rows
+    result["rejected_dashes"] = rejected_rows
     result["gaps_3d_raw_m"] = gaps
+    result["chain_count_after_ground_filter"] = len(survivors)
 
     if len(lengths) < 2:
-        result["status"] = "too_few_3d_samples"
+        off_ground = sum(1 for r in rejected_rows if r.get("rejected") == "off_ground")
+        result["status"] = "off_ground_rejected" if off_ground > 0 else "too_few_3d_samples"
     else:
         arr = np.array(lengths)
         median_len = float(np.median(arr))
@@ -312,49 +400,103 @@ def main() -> None:
                 else:
                     gap_flags.append("ratio_mismatch")
             scale = spec["dash_m"] / median_len
+
+            # Post-calibration ground re-check in REAL meters. The raw-unit
+            # pre-filter cannot use an absolute height limit because SHARP's
+            # raw scale differs per camera (a railing 1m up measures only
+            # 0.15 raw units on a far-off-FOV camera). Once the candidate
+            # scale exists, heights convert to meters: paint sits within
+            # plane-fit noise (<0.35m), railings/shelter frames start ~0.8m.
+            if ground is not None:
+                kept, dropped = [], []
+                for row in dash_rows:
+                    h = row.get("height_above_ground_raw")
+                    if h is not None and h * scale > 0.35:
+                        dropped.append({**row, "rejected": "off_ground_real_m"})
+                    else:
+                        kept.append(row)
+                if dropped:
+                    rejected_rows.extend(dropped)
+                    dash_rows = kept
+                    lengths = [r["length_3d_raw_m"] for r in dash_rows]
+                    result["dashes"] = dash_rows
+                    result["rejected_dashes"] = rejected_rows
+                    result["chain_count_after_ground_filter"] = len(dash_rows)
+                    if len(lengths) >= 2:
+                        arr = np.array(lengths)
+                        median_len = float(np.median(arr))
+                        cv_val = float(arr.std() / max(1e-9, arr.mean()))
+                        median_len_px = float(np.median([r["length_px"] for r in dash_rows]))
+                        scale = spec["dash_m"] / median_len
+                        measured_ratios = [g / median_len for g in gaps]
+                    else:
+                        spec_id = None
+                        scale = None
         else:
             gap_flags = ["no_spec_match"] * len(measured_ratios)
             scale = None
 
-        # Confidence gating: all three must hold for a trustworthy anchor.
-        # Short markings (guide lines ~50cm) often fail the pixel-length gate:
-        # at low resolution the tip-sampling error dominates the measurement.
-        checks = {
-            "spec_identified": spec_id is not None,
-            "length_cv_ok": cv_val <= args.max_length_cv,
-            "pixel_length_ok": median_len_px >= 30.0,
-        }
-        if all(checks.values()):
-            status = "ok"
-        elif spec_id is None:
-            status = "no_spec_match"
-        else:
-            status = "low_confidence"
-
-        result.update(
-            {
-                "length_median_raw_m": median_len,
-                "length_median_px": median_len_px,
-                "length_cv": cv_val,
-                "identified_spec": spec_id,
-                "identified_spec_note": MARKING_SPECS[spec_id]["note"] if spec_id else None,
-                "spec_ratio_error": spec_ratio_err,
-                "scale_factor": scale,
-                "gap_over_dash_ratios": measured_ratios,
-                "gap_flags": gap_flags,
-                "confidence_checks": checks,
-                "status": status,
-            }
+        fully_rejected = (
+            scale is None
+            and spec_id is None
+            and any(r.get("rejected") == "off_ground_real_m" for r in rejected_rows)
         )
+        if fully_rejected:
+            # The whole chain turned out to be an elevated structure once its
+            # implied scale exposed the true heights.
+            result.update({"status": "off_ground_rejected", "scale_factor": None})
+        else:
+            # Confidence gating: all three must hold for a trustworthy anchor.
+            # Short markings (guide lines ~50cm) often fail the pixel-length
+            # gate: at low resolution tip-sampling error dominates.
+            checks = {
+                "spec_identified": spec_id is not None,
+                "length_cv_ok": cv_val <= args.max_length_cv,
+                "pixel_length_ok": median_len_px >= 30.0,
+            }
+            if all(checks.values()):
+                status = "ok"
+            elif spec_id is None:
+                status = "no_spec_match"
+            else:
+                status = "low_confidence"
+
+            result.update(
+                {
+                    "length_median_raw_m": median_len,
+                    "length_median_px": median_len_px,
+                    "length_cv": cv_val,
+                    "identified_spec": spec_id,
+                    "identified_spec_note": MARKING_SPECS[spec_id]["note"] if spec_id else None,
+                    "spec_ratio_error": spec_ratio_err,
+                    "scale_factor": scale,
+                    "gap_over_dash_ratios": measured_ratios,
+                    "gap_flags": gap_flags,
+                    "confidence_checks": checks,
+                    "status": status,
+                }
+            )
 
     canvas = image.copy()
+    scale_for_draw = result.get("scale_factor")
+    for row in rejected_rows:
+        p1 = np.array(row["tip_near_px"], dtype=int)
+        p2 = np.array(row["tip_far_px"], dtype=int)
+        cv2.line(canvas, tuple(p1), tuple(p2), (0, 0, 255), 2)
+        mid = ((p1 + p2) / 2).astype(int)
+        cv2.putText(canvas, row["rejected"], (mid[0] + 8, mid[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
     for row in dash_rows:
         p1 = np.array(row["tip_near_px"], dtype=int)
         p2 = np.array(row["tip_far_px"], dtype=int)
         cv2.line(canvas, tuple(p1), tuple(p2), (0, 255, 0), 3)
         if row["length_3d_raw_m"] is not None:
             mid = ((p1 + p2) / 2).astype(int)
-            text = f"{row['length_3d_raw_m']:.2f}m"
+            if scale_for_draw is not None:
+                # Show what the dash measures AFTER calibration so it can be
+                # compared to the legal length (4m / 0.5m) at a glance.
+                text = f"{row['length_3d_raw_m'] * scale_for_draw:.2f}m"
+            else:
+                text = f"raw {row['length_3d_raw_m']:.2f}"
             cv2.putText(canvas, text, (mid[0] + 10, mid[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 4)
             cv2.putText(canvas, text, (mid[0] + 10, mid[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
     header = f"chain={len(chain)} status={result['status']}"
