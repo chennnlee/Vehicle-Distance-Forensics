@@ -38,6 +38,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-path-m", type=float, default=5.0, help="Minimum path length in meters for a speed to be reported.")
     parser.add_argument("--render-video", default="", help="Optional output mp4 path: per-frame boxes, recent trails, live speed labels, real-time playback.")
     parser.add_argument("--playback-fps", type=int, default=12, help="Playback fps of the rendered video; source frames are repeated to match real durations.")
+    parser.add_argument("--playback-mode", choices=("realtime", "native"), default="realtime",
+                        help="realtime: wall-clock pacing (frames repeat to fill their true duration; forensically faithful). "
+                        "native: one output frame per source frame like the original stream player -- smooth but time-compressed.")
     return parser.parse_args()
 
 
@@ -140,6 +143,7 @@ def render_video(
     video_path: Path,
     playback_fps: int,
     trail_seconds: float = 6.0,
+    mode: str = "realtime",
 ) -> None:
     """Real-time annotated playback: each source frame is repeated to match its
     true duration (from OSD-clock timestamps), so vehicle motion in the output
@@ -204,6 +208,22 @@ def render_video(
             cv2.putText(img, label, label_anchor, cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
     med_dt = float(np.median(np.diff(times)))
+    if mode == "native":
+        # One output frame per source frame, like the original stream player:
+        # smooth motion, but the timeline is compressed wherever the source
+        # skipped time. Speed labels stay correct (computed from real
+        # timestamps); a watermark declares the compression for honesty.
+        span = float(times[-1] - times[0])
+        speedup = span / max(1e-9, len(frames) / playback_fps)
+        for i, f in enumerate(frames):
+            img = cv2.imread(str(f))
+            draw_at(img, float(times[i]))
+            note = f"native playback (~x{speedup:.1f} time-compressed)"
+            cv2.putText(img, note, (16, img.shape[0] - 16), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 4)
+            cv2.putText(img, note, (16, img.shape[0] - 16), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
+            writer.write(img)
+        writer.release()
+        return
     for i, f in enumerate(frames):
         base = cv2.imread(str(f))
         t0 = float(times[i])
@@ -436,7 +456,7 @@ def main() -> None:
         video_path = Path(args.render_video)
         if not video_path.is_absolute():
             video_path = out_dir / video_path
-        render_video(frames, times, tracks, reported, video_path, args.playback_fps)
+        render_video(frames, times, tracks, reported, video_path, args.playback_fps, mode=args.playback_mode)
         print(f"saved: {video_path}")
 
     print(f"tracks_total={len(tracks)} reported={len(rows)}")
