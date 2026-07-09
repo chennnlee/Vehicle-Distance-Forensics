@@ -149,7 +149,7 @@ def build_ray_caster(ply_path: Path, scale: float, image_shape: tuple[int, int])
     return pixel_to_ground_m, ground
 
 
-SPEC_NOTE_EN = {"lane_line_4m": "4m lane dash", "guide_line_50cm": "0.5m guide line"}
+SPEC_NOTE_EN = {"lane_line_4m": "4m lane dash", "lane_line_4m_freeway": "4m freeway dash", "guide_line_50cm": "0.5m guide line"}
 
 
 def load_calibration_anchors(path: Path) -> tuple[list[dict], str]:

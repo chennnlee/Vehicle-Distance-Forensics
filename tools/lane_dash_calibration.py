@@ -20,6 +20,7 @@ from utils.pointcloud_io import load_point_cloud_points
 # raw (uncalibrated) SHARP measurements before any absolute scale is known.
 MARKING_SPECS = {
     "lane_line_4m": {"dash_m": 4.0, "gap_m": 6.0, "note": "車道線/行車分向線 4m/6m"},
+    "lane_line_4m_freeway": {"dash_m": 4.0, "gap_m": 8.0, "note": "高速公路/快速公路車道線 4m/8m"},
     "guide_line_50cm": {"dash_m": 0.5, "gap_m": 0.5, "note": "路口行車導引線/左彎待轉區線 50cm/50cm"},
 }
 
