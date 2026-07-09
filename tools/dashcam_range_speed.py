@@ -103,42 +103,34 @@ def build_geometry(ply_path: Path, scale: float, image_shape: tuple[int, int], h
     return pixel_to_plane, ground
 
 
-def road_motion_px(prev_gray, gray, boxes, hood_y: int) -> float | None:
-    """Median per-frame pixel displacement of tracked road/scene features.
+def road_change_fraction(prev_gray, gray, boxes, hood_y: int) -> float:
+    """Fraction of road-band pixels that changed between consecutive frames.
 
-    Optical flow CANNOT measure a vibrating dashcam's speed (it fabricates
-    near-zero readings at 60 km/h when tracking fails), but the median
-    displacement of many forward-backward-consistent features is still a
-    trustworthy MOTION MAGNITUDE cue: ~0 px pins a standstill, and a small
-    value vetoes any fast odometer lock (passing traffic streaming through
-    the search band cannot be OUR motion if the road barely moves).
+    Feature-tracking motion cues proved unreliable across rigs (corners latch
+    onto windshield reflections that are pixel-static at any speed, which
+    once judged a 70 km/h night drive "stopped"), so the standstill cue is
+    plain frame differencing on the road band: any real motion -- day or
+    headlight-lit night -- churns the road texture, while at a stop only
+    other road users change pixels, and those are masked out via the
+    detector boxes. The band stays above the hood and the burned-in OSD.
     """
     h, w = gray.shape
-    y0, y1 = int(h * 0.45), hood_y
-    x0, x1 = int(w * 0.12), int(w * 0.88)
-    roi_prev = prev_gray[y0:y1, x0:x1]
-    roi_now = gray[y0:y1, x0:x1]
-    p0 = cv2.goodFeaturesToTrack(roi_prev, maxCorners=300, qualityLevel=0.01, minDistance=12)
-    if p0 is None or len(p0) < 40:
-        return None
-    lk = dict(winSize=(21, 21), maxLevel=4,
-              criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01))
-    p1, st, _ = cv2.calcOpticalFlowPyrLK(roi_prev, roi_now, p0, None, **lk)
-    p0b, stb, _ = cv2.calcOpticalFlowPyrLK(roi_now, roi_prev, p1, None, **lk)
-    fb_err = np.linalg.norm((p0 - p0b).reshape(-1, 2), axis=1)
-    disp = np.linalg.norm((p1 - p0).reshape(-1, 2), axis=1)
-    okm = (st.reshape(-1) > 0) & (stb.reshape(-1) > 0) & (fb_err < 1.0)
-    if okm.sum() < 40:
-        return None
-    in_box = np.zeros(len(p0), dtype=bool)
-    for j in np.where(okm)[0]:
-        px, py = p0[j, 0, 0] + x0, p0[j, 0, 1] + y0
-        if any(bx1 <= px <= bx2 and by1 <= py <= by2 for bx1, by1, bx2, by2 in boxes):
-            in_box[j] = True
-    okm &= ~in_box
-    if okm.sum() < 40:
-        return None
-    return float(np.median(disp[okm]))
+    y0, y1 = int(h * 0.55), min(hood_y, h - 80)
+    x0, x1 = int(w * 0.25), int(w * 0.75)
+    if y1 <= y0:
+        return 1.0
+    diff = cv2.absdiff(gray[y0:y1, x0:x1], prev_gray[y0:y1, x0:x1]) > 14
+    mask = np.ones_like(diff, dtype=bool)
+    for bx1, by1, bx2, by2 in boxes:
+        ax1 = max(0, int(bx1) - x0)
+        ay1 = max(0, int(by1) - y0)
+        ax2 = min(diff.shape[1], int(bx2) - x0)
+        ay2 = min(diff.shape[0], int(by2) - y0)
+        if ax2 > ax1 and ay2 > ay1:
+            mask[ay1:ay2, ax1:ax2] = False
+    if mask.sum() < 500:
+        return 1.0
+    return float(diff[mask].mean())
 
 
 def extract_odometer_signals(frames: list[Path], points: list[tuple[int, int]]) -> dict:
@@ -182,11 +174,12 @@ def dash_cycle_speeds(frames: list[Path], points: list[tuple[int, int]], cycle_m
     lag_min, lag_max = int(0.25 * fps), int(3.0 * fps)  # 3..40 m/s for a 10 m cycle
     v = np.full(n, np.nan)
     conf = np.zeros(n)
+    prom = np.zeros(n)
     for i in range(n):
         j0, j1 = max(0, i - half), min(n, i + half)
         if j1 - j0 < lag_max + 10:
             j0, j1 = max(0, min(j0, n - lag_max - 10)), min(n, max(j1, lag_max + 10))
-        cand: list[tuple[float, float, int, np.ndarray]] = []
+        cand: list[tuple[float, float, int, np.ndarray, float]] = []
         for pt in points:
             s = np.array(sig[pt][j0:j1])
             s = s - s.mean()
@@ -238,7 +231,7 @@ def dash_cycle_speeds(frames: list[Path], points: list[tuple[int, int]], cycle_m
                 if abs(denom) > 1e-9:  # parabolic sub-frame refinement
                     lag_f = lag + 0.5 * float(ac[lag - 1] - ac[lag + 1]) / float(denom)
             if c >= 0.25 and lag_f > 0:
-                cand.append((cycle_m * fps / lag_f, c, pt[1], s))
+                cand.append((cycle_m * fps / lag_f, c, pt[1], s, float(ac[lag] - ac[first_min])))
         # Anti-vibration phase gate: engine/handlebar shake is periodic too,
         # and it fools every other check because it is stationary and global.
         # But real paint streams PAST the rows in sequence (far row pulses
@@ -261,7 +254,8 @@ def dash_cycle_speeds(frames: list[Path], points: list[tuple[int, int]], cycle_m
             # point whose patch drifted onto a crack or a neighboring line.
             v[i] = float(np.median([x[0] for x in cand]))
             conf[i] = float(np.median([x[1] for x in cand]))
-    return v, conf
+            prom[i] = float(np.median([x[4] for x in cand]))
+    return v, conf, prom
 
 
 def main() -> None:
@@ -326,27 +320,27 @@ def main() -> None:
                              "bh": float(y2 - y1), "pos": pos, "sens": sens})
         per_frame_dets.append(dets)
         if prev_gray is not None:
-            motion_raw.append(road_motion_px(prev_gray, gray, boxes_px, args.hood_y) or np.nan)
+            motion_raw.append(road_change_fraction(prev_gray, gray, boxes_px, args.hood_y))
         prev_gray = gray
         if i % 100 == 0:
             print(f"  pass1 {i}/{len(frames)}")
 
     n = len(frames)
-    # 0.5 s nan-median turns per-pair motion magnitudes into stable spans.
-    motion = np.array(motion_raw, dtype=np.float64)
+    # 0.5 s median turns per-pair change fractions into stable spans.
+    change = np.array(motion_raw, dtype=np.float64)
     k = max(3, int(round(args.fps * 0.5)) | 1)
     pad = k // 2
     with np.errstate(all="ignore"):
-        motion = np.array([np.nanmedian(motion[max(0, i - pad): i + pad + 1])
-                           if np.isfinite(motion[max(0, i - pad): i + pad + 1]).any() else np.nan
+        change = np.array([np.nanmedian(change[max(0, i - pad): i + pad + 1])
+                           if np.isfinite(change[max(0, i - pad): i + pad + 1]).any() else np.nan
                            for i in range(n)])
-    stopped = np.isfinite(motion) & (motion < 1.2)
+    stopped = np.isfinite(change) & (change < 0.02)
 
     # Ego speed policy: the dash-cycle odometer is the only trusted moving-
-    # speed source (statutory anchor); a confident feature-track standstill
-    # pins 0; short gaps are interpolated; everything else is an honest NaN
-    # ("no lock") -- a vibrating dashcam's optical flow fabricates low speeds
-    # at 60 km/h, so it gets no say in the speed value.
+    # speed source (statutory anchor); a confident standstill pins 0; short
+    # gaps are interpolated; everything else is an honest NaN ("no lock").
+    # Optical flow gets no say in any speed value: on vibrating or night
+    # footage it fabricates near-zero readings at 60+ km/h.
     ego_s = np.full(n, np.nan)
     ego_method = np.array(["none"] * n, dtype=object)
     if args.odometer_points:
@@ -355,16 +349,24 @@ def main() -> None:
         # Dual-window agreement gate: octave errors and acceleration smear are
         # window-length sensitive while true locks are not, so demand two
         # window sizes to agree within 12% before trusting a value.
-        v1, c1 = dash_cycle_speeds(frames, pts, args.dash_cycle_m, args.fps, args.odometer_window_s, sig=sig)
-        v2, c2 = dash_cycle_speeds(frames, pts, args.dash_cycle_m, args.fps, args.odometer_window_s * 1.7, sig=sig)
+        v1, c1, p1 = dash_cycle_speeds(frames, pts, args.dash_cycle_m, args.fps, args.odometer_window_s, sig=sig)
+        v2, c2, _ = dash_cycle_speeds(frames, pts, args.dash_cycle_m, args.fps, args.odometer_window_s * 1.7, sig=sig)
         agree = np.isfinite(v1) & np.isfinite(v2) & (np.abs(v1 - v2) <= 0.12 * np.maximum(v1, v2))
-        v_odo = np.where(agree, 0.5 * (v1 + v2), np.nan)
-        # Physical-consistency veto: >25 km/h moves near-field road pixels by
-        # >>2.5 px/frame, so a fast lock while the road barely moves must be
-        # OTHER traffic streaming through the band, not our motion.
-        veto = np.isfinite(v_odo) & (v_odo > 25 / 3.6) & np.isfinite(motion) & (motion < 2.5)
-        v_odo[veto] = np.nan
-        use = np.isfinite(v_odo) & ~stopped
+        # A STRONG short-window lock (sharp, prominent peak) stands on its
+        # own: on short decelerating clips the long window's average drifts
+        # away and the agreement gate would wrongly discard a clean lock.
+        strong = np.isfinite(v1) & (c1 >= 0.5) & (p1 >= 0.5)
+        v_odo = np.where(agree, 0.5 * (v1 + v2), np.where(strong, v1, np.nan))
+        # A prominence-gated lock outranks the standstill vote (paint cannot
+        # stream past the band while parked), and streaming paint (high band
+        # signal variance) vetoes the standstill vote in turn.
+        use = np.isfinite(v_odo)
+        stopped &= ~use
+        act_win = max(5, int(round(args.fps * 0.5)))
+        arr = np.array([sig[pt] for pt in pts], dtype=np.float64)
+        activity = np.array([float(arr[:, max(0, i - act_win): i + act_win + 1].std(axis=1).max())
+                             for i in range(n)])
+        stopped &= activity < 3.0
         ego_s[use] = v_odo[use]
         ego_method[use] = "dash_odometer"
         print(f"dash odometer: coverage {use.mean()*100:.0f}%  "
