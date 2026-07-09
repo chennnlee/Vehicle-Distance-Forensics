@@ -21,6 +21,7 @@ import numpy as np
 
 SERIES_1 = "#2a78d6"  # categorical slot 1: visual estimate line
 SERIES_2 = "#1baf7a"  # categorical slot 2: GPS truth dots (direct-labeled)
+SERIES_3 = "#eda100"  # categorical slot 3: manual frame-count GT segments (direct-labeled per relief rule)
 INK = "#333333"
 INK_MUTED = "#767676"
 GRID = "#e3e3e0"
@@ -40,17 +41,29 @@ def main() -> None:
     for ax, case in zip(axes, cases):
         rows = list(csv.DictReader(open(case["ego_csv"])))
         t = np.array([float(r["t_s"]) for r in rows])
-        v = np.array([float(r["ego_visual_kmh"]) for r in rows])
+        # Empty cells are honest "no lock" readings; the line simply breaks there.
+        v = np.array([float(r["ego_visual_kmh"]) if r["ego_visual_kmh"] else np.nan for r in rows])
         gps = np.array(case["gps"], dtype=float)
         tg = np.arange(len(gps)) * float(case.get("gps_dt", 2.0))
 
         ax.plot(t, v, color=SERIES_1, lw=2, label="visual (dash-cycle odometer)", zorder=3)
         ax.scatter(tg, gps, s=64, color=SERIES_2, zorder=4, label="GPS (dashcam OSD)")
 
-        vi = np.interp(tg, t, v)
-        mae = float(np.mean(np.abs(vi - gps)))
-        bias = float(np.mean(vi - gps))
-        ax.set_title(f"{case['name']}   MAE {mae:.1f} km/h, bias {bias:+.1f} km/h vs GPS",
+        # Optional manual frame-count ground-truth segments (e.g. the
+        # forensic lab's per-segment speeds), drawn over their time spans.
+        for k, seg in enumerate(case.get("segments", [])):
+            t0, t1, kph = seg["t0"], seg["t1"], seg["kph"]
+            ax.plot([t0, t1], [kph, kph], color=SERIES_3, lw=4, solid_capstyle="butt", zorder=5,
+                    label="manual frame-count GT" if k == 0 else None)
+            ax.annotate(f"{kph:g}", ((t0 + t1) / 2, kph), textcoords="offset points",
+                        xytext=(0, 8), ha="center", color=INK, fontsize=9)
+
+        good = np.isfinite(v)
+        vi = np.interp(tg, t[good], v[good]) if good.any() else np.full_like(gps, np.nan)
+        has_reading = np.array([np.isfinite(v[np.abs(t - tt) < 1.0]).any() for tt in tg])
+        mae = float(np.mean(np.abs(vi[has_reading] - gps[has_reading]))) if has_reading.any() else float("nan")
+        bias = float(np.mean(vi[has_reading] - gps[has_reading])) if has_reading.any() else float("nan")
+        ax.set_title(f"{case['name']}   MAE {mae:.1f} km/h, bias {bias:+.1f} km/h vs GPS (where locked)",
                      color=INK, fontsize=11, loc="left")
         ax.set_ylabel("speed (km/h)", color=INK)
         ax.set_xlabel("time in clip (s)", color=INK)
@@ -62,13 +75,15 @@ def main() -> None:
             ax.spines[spine].set_color(INK_MUTED)
         ax.tick_params(colors=INK_MUTED)
         # direct labels near the series ends (identity never color-alone)
-        ax.annotate("visual", (t[-1], v[-1]), textcoords="offset points", xytext=(6, 2),
+        t_last = t[good][-1] if good.any() else t[-1]
+        v_last = v[good][-1] if good.any() else 0.0
+        ax.annotate("visual", (t_last, v_last), textcoords="offset points", xytext=(6, 2),
                     color=INK, fontsize=9)
         ax.annotate("GPS", (tg[-1], gps[-1]), textcoords="offset points", xytext=(6, -12),
                     color=INK, fontsize=9)
         ax.legend(loc="lower right", frameon=False, fontsize=9, labelcolor=INK)
-        lo = min(v.min(), gps.min()) - 6
-        hi = max(np.percentile(v, 98), gps.max()) + 6
+        lo = min(np.nanmin(v) if good.any() else 0.0, gps.min()) - 6
+        hi = max(np.nanpercentile(v, 98) if good.any() else 0.0, gps.max()) + 6
         ax.set_ylim(max(0, lo), hi)
 
     fig.tight_layout()
