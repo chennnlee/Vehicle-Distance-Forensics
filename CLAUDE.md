@@ -21,6 +21,12 @@ CPU-only,GPU 6GB 會 OOM,約 90 秒)→ RANSAC 擬合地面平面 y=ax+bz+c(`lan
 NVR 串流謊報 fps → OSD 時鐘秒跳定時(無 OSD 用 --fps)。YOLOv8m-seg 接地點(mask 最低 12%)→
 平面座標 → 匈牙利+方向閘+bbox尺寸閘追蹤 → 等速擬合。品質防護:淨位移門檻(防停等抖動灌水)、
 遠場旗標(靈敏度 m/px>0.3 拒發速度)、±95%CI(擬合標準誤⊕scale CV;CI>50%速度→灰色問號)。
+**v3 追蹤器(防框跳動/重複計數,2026-07-10)**:同幀重複框抑制(car+truck 雙框同車,交集/小框>0.65
+留高信心)、類別群組關聯(car/truck/bus 同群,防類別閃爍剪軌;機車獨立群;回報=多數決)、
+斷軌事後縫合(`stitch_fragments`:等速外插+尺寸+方向閘,`merged_from` 稽核)、平行鬼影軌抑制、
+遠場防護鏈(遠場觀測不進速度擬合/不當縫合端點/關聯閘鎖 4m——防「地平線漫遊」把對向車接進來)、
+關聯閘物理化(速度誤差項+4m/s² 加速度項;舊 speed×dt×1.6 斷檔數秒後會吞下一台車捏造 ~100km/h)、
+渲染顯示框 (¼,½,¼) 置中平滑(量測資料不動,時間斷點不平滑)。
 影片:--anchors-json 畫校正線、HUD、--also-frame-video 逐幀版、自動 h264。
 
 **管線 B:行車紀錄器** `tools/dashcam_range_speed.py`
@@ -33,27 +39,33 @@ NVR 串流謊報 fps → OSD 時鐘秒跳定時(無 OSD 用 --fps)。YOLOv8m-seg
 - 他車:接地點→平面→跟車距離;絕對速=自車速+d(range)/dt;無自車速時只給距離。
 - 無讀值誠實標 no lock,只內插 ≤2s 空隙。
 
-## 驗證狀態(截至 2026-07-09)
+## 驗證狀態(截至 2026-07-10)
 
 | 驗證 | 結果 |
 |---|---|
 | CCTV 海盛 5 案 vs 人工交比法 | 3 案吻合(45.5/48.4/44.6),2 案=失效邊界(遠場、螢幕翻拍摩爾紋) |
+| **1130221 前鎮交比案(機車過口)** | 同窗 48.6 vs 人工 48.37 km/h(**+0.5%**);人工幀號=我方−1(輪胎座標對出);全軌擬合 39.6=含減速段 |
+| v3 追蹤器 A/B(同幀重跑) | 配對速度差 median≈0(kh012 n=113);「消失後重生」可疑對 8→4;kh013 遠場污染案例 34.1→33.9 保住 |
 | 遠場自動拒絕 | 1110822 兩軌 sens 0.83/0.88 自動 far_field ✓ |
 | 跨車道尺度 | 4m 線 ~5.3%、50cm 導引線 10–22%(短標線端點誤差大,能用 4m 線就用) |
 | 碼表 vs GPS(002 高速) | MAE 2.4 km/h(GPS 燒在 OSD,非循環) |
 | 案18(機車)vs 海盛人工 | 三段 −0.8/−1.1/−0.4;猛加速段誠實 no-lock |
 | 案78-28(汽車,夜間576p)| seg1 +2.8、seg2 −1.3(落在海盛人工/AI/GPS 離散內);片尾 0.6s 是量測邊界 |
+| 案78-29(汽車,夜間1296p)| seg1 +2.1(人工 57.1、車上時速表 ≈60、我們 59.2);seg2 片尾 no-lock |
 
 ## 重要路徑
 
 - 素材:`data/20260317_AI辨速系統案例/`(海盛案例包:CCTV、汽車/機車行車紀錄器,
   `_manual.docx/xlsx`=人工畫格法真值、`_ai.*`=海盛AI版、`_record.*`=機車案真值;
   **行車紀錄器 OSD 大多燒有 GPS 車速=現成真值**)。20251029 資料夾另有 32 機車+8 汽車鑑定案(檔名含 KPH)。
-- 正式成果:`data/output/report_final/`(CCTV 四台)、`data/output/dashcam_demo/`(002/008)、
+- 正式成果:`data/output/report_final/`(CCTV 四台,v3;舊 csv/json 在各 `v2_backup/`)、
+  `data/output/cctv_validation/qz1130221/`(交比案驗證)、`data/output/dashcam_demo/`(002/008)、
   `data/output/dashcam_validation/`(case18、case7828,各含 validation_report.md)——每資料夾有 README。
 - SHARP 點雲:`data/output/sharp_gaussians/*.ply`;校正:`data/output/lane_dash_calib/<cam>/`。
 - TDX 憑證在 `.env`(gitignored);抓 CCTV 用 `tools/fetch_tdx_cctv.py`。
-- **幀目錄在 /tmp 會消失**:rec_kh013/rec_hsinchu/rec_kh012/rec_kh019(TDX 錄影)、
+- **幀目錄在 /tmp 會消失**:rec_kh013/rec_hsinchu006/rec_kh012/rec_kh019(可從各
+  `report_final/<cam>/original_h264.mp4` 重建,注意 OSD 秒跳在重編碼幀上偵測略異→時間軸
+  與舊輸出有 1~3s 局部平移,速度不受影響)、rec_qz1130221(1130221 案 .avi)、
   case*_frames、dc002_frames(002 白天高速 25-45s)、dc008_frames(008 街道 10-30s)、
   c18_frames、c7828_frames。重建:`ffmpeg -i 原片 -qscale:v 2 /tmp/X/f%04d.jpg`(002/008 要加 -ss/-t)。
 
@@ -63,10 +75,13 @@ NVR 串流謊報 fps → OSD 時鐘秒跳定時(無 OSD 用 --fps)。YOLOv8m-seg
 - hsinchu006:ply CCTV006-ED,scale 1.169174688422128,cv 0.0593,--fps 0.95 --conf 0.25(無 OSD)
 - kh012:ply 64000C000012,scale 2.227367377128456,cv 0.1067
 - kh019:ply kh019_ref,scale 1.0650914748292453,cv 0.0603
+- qz1130221:ply qz1130221_ref,scale 1.0995932795968135(0.5m 導引線,calib ROI "500,340,1920,700"),
+  cv 0.10(保守),--fps 10.0533 --min-track-seconds 1.0,label "Qianzhen 1130221"
 - dc002:scale 1.01(車道寬 3.5m 錨),點 "586,800;546,850;672,750",cycle 10(高架用一般 4/6 規格!)
 - dc008:scale 0.884(高度轉移),點 "1223,800;1272,840;1295,860",cycle 10
 - case18:fps 30.0,scale 1.05,hood 940,點 "1250,663;1280,799;1410,828;600,805;420,805;850,780"
 - case7828:fps 29.773,scale 1.0(未錨定),hood 510,點 "600,420;640,455;680,490"
+- case7829:fps 30.0,scale 1.0(未錨定),hood 1060,點 "1219,794;1311,886;1415,989"(2304×1296)
 
 ## 已知失效邊界(報告素材,勿「修掉」——誠實標示是計畫要求)
 
@@ -76,6 +91,8 @@ NVR 串流謊報 fps → OSD 時鐘秒跳定時(無 OSD 用 --fps)。YOLOv8m-seg
 ## 待辦/下一步
 
 - 案 5、43(機車)同流程驗證;批量掃 20251029 的 32+8 案 → 誤差分布圖
-- 1130221 固定式 CCTV 交比案(還沒跑)
-- 白天重錄 TDX(目前素材都是夜間;使用者操作)
-- 報告草稿(素材已齊:流程圖、校正、交叉驗證、五案表、失效邊界、±CI)
+- 案 44-07 時間基準異常(人工秒數=等效 ~10.3fps 對不上 30fps 容器)待釐清,見 case7829/validation_report.md 附註
+- 20251029 資料夾其餘固定式 CCTV 案(1130221 已完成,+0.5%)
+- 白天重錄 TDX(目前素材都是夜間;使用者操作)——1130221 已提供白天路口 CCTV 素材
+- 報告草稿(素材已齊:流程圖、校正、交叉驗證、六案表、失效邊界、±CI)
+- 使用者尚未確認 v3 影片觀感(框跳動/重複計數是否解決);v3 程式碼未 commit
