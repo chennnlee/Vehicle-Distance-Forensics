@@ -51,6 +51,13 @@ def parse_args() -> argparse.Namespace:
                         help="Legal dash cycle length: 4m dash + 6m gap = 10m on ordinary roads/expressways, "
                         "4m + 8m = 12m on freeways.")
     parser.add_argument("--odometer-window-s", type=float, default=3.0, help="Sliding autocorrelation window.")
+    parser.add_argument("--octave-threshold", type=float, default=0.75,
+                        help="Octave-guard ratio: double the picked lag when ac[2*lag] >= this * ac[lag]. "
+                        "The default 0.75 catches interleaved neighboring-lane dashes (true period = double). "
+                        "But on clean cruising footage the finite-window autocorrelation of the TRUE period "
+                        "still decays only to ~(W-2L)/(W-L) (e.g. 0.85 at 87 km/h in a 3 s window), so 0.75 "
+                        "halves the speed systematically. When the search band (+-120 px) is geometrically "
+                        "too narrow to contain a second lane line, raise this to ~0.95 to disable the guard.")
     parser.add_argument("--max-sens-m-per-px", type=float, default=0.8,
                         help="far-range display threshold. Looser than the CCTV pipeline's 0.30: at 30 fps there "
                         "are ~30x more observations to average, so a given per-pixel sensitivity costs far less "
@@ -134,7 +141,7 @@ def road_change_fraction(prev_gray, gray, boxes, hood_y: int) -> float:
 
 
 def extract_odometer_signals(frames: list[Path], points: list[tuple[int, int]]) -> dict:
-    """Per-frame local-contrast pulse signal at each odometer point."""
+    """Per-frame (pulse strength, pulse x-offset) at each odometer point."""
     sig = {pt: [] for pt in points}
     for f in frames:
         g = cv2.cvtColor(cv2.imread(str(f)), cv2.COLOR_BGR2GRAY)
@@ -146,17 +153,23 @@ def extract_odometer_signals(frames: list[Path], points: list[tuple[int, int]]) 
             # clip, so a FIXED pixel slides off the paint. Instead search a
             # +-120 px band on the row: whenever a dash crosses this row, the
             # band's peak lights up no matter where the line has wandered.
-            band = diff[max(0, y - 6): y + 7, max(0, x - 120): x + 121]
+            x0 = max(0, x - 120)
+            band = diff[max(0, y - 6): y + 7, x0: x + 121]
             if band.size == 0:
-                sig[(x, y)].append(0.0)
+                sig[(x, y)].append((0.0, np.nan))
                 continue
             col = band.mean(axis=0)
-            sig[(x, y)].append(float(col.max() - np.median(col)))
-    return sig
+            # Where in the band the pulse sits: slow drift is normal lane
+            # wander, but a systematic slide across the band betrays a lane
+            # change (the paint being crossed is not the statutory lane dash).
+            sig[(x, y)].append((float(col.max() - np.median(col)),
+                                float(x0 + int(np.argmax(col)) - x)))
+    return {pt: np.asarray(v, dtype=np.float64) for pt, v in sig.items()}
 
 
 def dash_cycle_speeds(frames: list[Path], points: list[tuple[int, int]], cycle_m: float,
-                      fps: float, window_s: float, sig: dict | None = None) -> tuple[np.ndarray, np.ndarray]:
+                      fps: float, window_s: float, sig: dict | None = None,
+                      octave_threshold: float = 0.75) -> tuple[np.ndarray, np.ndarray]:
     """Ego speed from the legal dash cycle streaming past fixed image spots.
 
     The lane paint is a legal-length periodic pattern (dash+gap), so the
@@ -181,7 +194,8 @@ def dash_cycle_speeds(frames: list[Path], points: list[tuple[int, int]], cycle_m
             j0, j1 = max(0, min(j0, n - lag_max - 10)), min(n, max(j1, lag_max + 10))
         cand: list[tuple[float, float, int, np.ndarray, float]] = []
         for pt in points:
-            s = np.array(sig[pt][j0:j1])
+            arr = np.asarray(sig[pt])[j0:j1]
+            s = arr[:, 0].copy()
             s = s - s.mean()
             # Signal-strength gate: when the vehicle is stopped a dash can sit
             # inside the search band as a near-constant HIGH signal whose
@@ -189,6 +203,17 @@ def dash_cycle_speeds(frames: list[Path], points: list[tuple[int, int]], cycle_m
             # streaming paint, no measurement.
             if s.std() < 2.0:
                 continue
+            # Lane-keeping gate: pulses from the statutory lane dash stay put
+            # inside the search band (drift < ~15 px per window); during a
+            # LANE CHANGE the band sweeps across ramp/exit micro-dashes and
+            # the pulse x slides system-wide, producing rock-solid locks at
+            # fantasy speeds (146 km/h at a true 82). Wide pulse-x spread ->
+            # this point is not looking at legal paint right now.
+            pulsed = arr[:, 0] > 10.0
+            if pulsed.sum() >= 4:
+                q75, q25 = np.percentile(arr[pulsed, 1], [75, 25])
+                if q75 - q25 > 50.0:
+                    continue
             ac = np.correlate(s, s, "full")[len(s) - 1:]
             if ac[0] <= 0:
                 continue
@@ -215,9 +240,23 @@ def dash_cycle_speeds(frames: list[Path], points: list[tuple[int, int]], cycle_m
             # fundamental -- take it.
             for _ in range(2):
                 dbl = 2 * lag
-                if dbl <= hi and ac[dbl] >= 0.75 * ac[lag]:
+                if dbl <= hi and ac[dbl] >= octave_threshold * ac[lag]:
                     lag = dbl
                 else:
+                    break
+            # Sub-octave correction: freeway lane dashes carry a retro-
+            # reflective road stud on every OTHER dash (20 m spacing), and on
+            # the near rows the stud outshines the paint, so the argmax lands
+            # on TWICE the statutory cycle (half the true speed). The paint's
+            # own peak still shows at half that lag; when it is a genuine
+            # local peak of comparable height, it IS the statutory cycle. A
+            # clean cruise lock is immune: half its lag falls inside the
+            # anticorrelated valley, never on a peak.
+            for h in (lag // 2, (lag + 1) // 2):
+                if h >= max(lag_min, first_min) and h < len(ac) - 1 \
+                        and ac[h] > ac[h - 1] and ac[h] > ac[h + 1] \
+                        and ac[h] >= 0.6 * ac[lag]:
+                    lag = h
                     break
             # Peak-prominence gate: a genuine dash lock rises from a real
             # valley (measured prominence 0.7-1.1); the broad shoulder of a
@@ -249,6 +288,17 @@ def dash_cycle_speeds(frames: list[Path], points: list[tuple[int, int]], cycle_m
                         zero_phase += 1
                 if zero_phase == min(len(pairs), 3):
                     cand = []
+        # Split-lock gate: when the surviving points disagree by >1.5x (one
+        # latched onto an adjacent-lane pattern or a seam), the median of two
+        # irreconcilable readings is their AVERAGE -- a fantasy value (34 and
+        # 98 km/h "agreeing" on 69). Keep the majority cluster around the
+        # median; if no such cluster exists, report nothing.
+        if len(cand) >= 2:
+            vs = np.array([x[0] for x in cand])
+            if vs.max() / max(vs.min(), 1e-9) > 1.5:
+                med = float(np.median(vs))
+                keep = [x for x in cand if abs(x[0] - med) <= 0.25 * med]
+                cand = keep if len(keep) >= 2 else []
         if cand:
             # Consensus across sampling points: the median shrugs off a single
             # point whose patch drifted onto a crack or a neighboring line.
@@ -349,8 +399,10 @@ def main() -> None:
         # Dual-window agreement gate: octave errors and acceleration smear are
         # window-length sensitive while true locks are not, so demand two
         # window sizes to agree within 12% before trusting a value.
-        v1, c1, p1 = dash_cycle_speeds(frames, pts, args.dash_cycle_m, args.fps, args.odometer_window_s, sig=sig)
-        v2, c2, _ = dash_cycle_speeds(frames, pts, args.dash_cycle_m, args.fps, args.odometer_window_s * 1.7, sig=sig)
+        v1, c1, p1 = dash_cycle_speeds(frames, pts, args.dash_cycle_m, args.fps, args.odometer_window_s, sig=sig,
+                                       octave_threshold=args.octave_threshold)
+        v2, c2, _ = dash_cycle_speeds(frames, pts, args.dash_cycle_m, args.fps, args.odometer_window_s * 1.7, sig=sig,
+                                      octave_threshold=args.octave_threshold)
         agree = np.isfinite(v1) & np.isfinite(v2) & (np.abs(v1 - v2) <= 0.12 * np.maximum(v1, v2))
         # A STRONG short-window lock (sharp, prominent peak) stands on its
         # own: on short decelerating clips the long window's average drifts
@@ -363,7 +415,7 @@ def main() -> None:
         use = np.isfinite(v_odo)
         stopped &= ~use
         act_win = max(5, int(round(args.fps * 0.5)))
-        arr = np.array([sig[pt] for pt in pts], dtype=np.float64)
+        arr = np.array([sig[pt][:, 0] for pt in pts], dtype=np.float64)
         activity = np.array([float(arr[:, max(0, i - act_win): i + act_win + 1].std(axis=1).max())
                              for i in range(n)])
         stopped &= activity < 3.0
