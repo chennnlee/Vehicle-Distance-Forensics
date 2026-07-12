@@ -74,3 +74,6 @@ tools/ml-sharp/
 # Secrets / API credentials
 .env
 .env.*
+
+# Claude Code local session files
+.claude/
