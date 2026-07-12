@@ -18,6 +18,24 @@ from lane_dash_calibration import fit_ground_plane_raw
 
 VEHICLE_CLASSES = {2: "car", 3: "motorcycle", 5: "bus", 7: "truck"}
 
+# YOLO flickers between car/truck/bus on the SAME vehicle (grille/roofline
+# ambiguity at CCTV resolution). Association and duplicate suppression must
+# therefore compare size groups, not raw classes, or every flicker cuts the
+# track and the vehicle is counted twice. Two-wheelers stay a separate group:
+# a scooter filtering past a queued car must never inherit its track.
+CLASS_GROUP = {"car": "4w", "bus": "4w", "truck": "4w", "motorcycle": "2w"}
+
+
+def _box_overlap(a: list[float], b: list[float]) -> float:
+    """Intersection over the SMALLER box area — catches nested double boxes
+    (car box inside a truck box on the same vehicle) that plain IoU misses."""
+    ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    inter = ix * iy
+    area_a = max(1e-6, (a[2] - a[0]) * (a[3] - a[1]))
+    area_b = max(1e-6, (b[2] - b[0]) * (b[3] - b[1]))
+    return inter / min(area_a, area_b)
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -216,11 +234,33 @@ def render_video(
     writer = cv2.VideoWriter(str(video_path), fourcc, playback_fps, (w, h))
     font = cv2.FONT_HERSHEY_SIMPLEX
 
+    def smooth_display(obs: list[dict]) -> list[dict]:
+        # Display-only smoothing: raw YOLO boxes wobble with shadows/mirrors/
+        # mask splits, which reads as box jitter in the report video. A
+        # centered (1/4, 1/2, 1/4) average over neighboring observations
+        # cancels that noise WITHOUT lagging constant-velocity motion (a
+        # centered average preserves linear trends). Measured positions in
+        # tracks.json stay raw. Skipped across uneven time gaps (stitch seams,
+        # dropouts), where asymmetric spacing would shift the box sideways.
+        if len(obs) < 3:
+            return obs
+        med_dt = float(np.median(np.diff([o["t"] for o in obs])))
+        sm = [dict(o) for o in obs]
+        for j in range(1, len(obs) - 1):
+            a, b, c = obs[j - 1], obs[j], obs[j + 1]
+            if (b["t"] - a["t"]) > 2.0 * med_dt or (c["t"] - b["t"]) > 2.0 * med_dt:
+                continue
+            if a.get("box") and b.get("box") and c.get("box"):
+                sm[j]["box"] = [0.25 * a["box"][k] + 0.5 * b["box"][k] + 0.25 * c["box"][k] for k in range(4)]
+            sm[j]["px"] = 0.25 * a["px"] + 0.5 * b["px"] + 0.25 * c["px"]
+            sm[j]["py"] = 0.25 * a["py"] + 0.5 * b["py"] + 0.25 * c["py"]
+        return sm
+
     # Sorted per-track observation arrays for time interpolation
     track_obs: dict[int, list[dict]] = {}
     for tid, rec in tracks.items():
         if tid in reported and rec["obs"]:
-            track_obs[tid] = sorted(rec["obs"], key=lambda o: o["t"])
+            track_obs[tid] = smooth_display(sorted(rec["obs"], key=lambda o: o["t"]))
 
     def lerp(a: float, b: float, w: float) -> float:
         return a + (b - a) * w
@@ -377,6 +417,159 @@ def render_video(
     writer.release()
 
 
+def _endpoint_velocity(obs: list[dict], tail: bool, window_s: float = 2.0) -> np.ndarray:
+    """Constant-velocity fit over a fragment's first/last `window_s` seconds."""
+    t = np.array([o["t"] for o in obs])
+    P = np.array([o["pos_m"] for o in obs])
+    m = (t >= t[-1] - window_s) if tail else (t <= t[0] + window_s)
+    if m.sum() < 2 or float(t[m][-1] - t[m][0]) < 0.2:
+        return np.zeros(3)
+    A = np.column_stack([t[m] - t[m][0], np.ones(int(m.sum()))])
+    return np.array([np.linalg.lstsq(A, P[m][:, ax], rcond=None)[0][0] for ax in range(3)])
+
+
+def _recompute_display_speeds(obs: list[dict]) -> None:
+    """Re-derive the per-observation display speed over the merged history so
+    the seam of a stitched track does not show bootstrap zeros mid-video."""
+    for j, o in enumerate(obs):
+        for k in range(j - 1, -1, -1):
+            if o["t"] - obs[k]["t"] >= 0.6:
+                d = float(np.linalg.norm(np.array(o["pos_m"]) - np.array(obs[k]["pos_m"])))
+                dt_w = o["t"] - obs[k]["t"]
+                o["speed_kmh"] = 0.0 if d < 0.35 else (d / dt_w) * 3.6
+                break
+
+
+def stitch_fragments(tracks: dict[int, dict], max_gap_s: float = 4.0,
+                     max_sens: float = 0.30) -> list[tuple[int, int]]:
+    """Rejoin track fragments that are the same physical vehicle.
+
+    A detection dropout longer than the tracker's 3 s active window kills the
+    track; the vehicle then re-enters as a fresh id and its speed is reported
+    twice. Post-hoc, fragment B continues fragment A when A's constant-velocity
+    prediction lands on B's first observation under the same physical gates the
+    online tracker uses (size group, bbox-height ratio, forward direction).
+    Pairs are accepted greedily by prediction error; each surviving track
+    records the absorbed ids in `merged_from` so a report reader can audit
+    every join. Returns the accepted (survivor, absorbed) pairs.
+    """
+    info: dict[int, dict] = {}
+    for tid, rec in tracks.items():
+        obs = sorted(rec["obs"], key=lambda o: o["t"])
+        rec["obs"] = obs
+        info[tid] = {
+            "grp": CLASS_GROUP.get(rec["cls"]),
+            "t0": obs[0]["t"], "t1": obs[-1]["t"],
+            "p0": np.array(obs[0]["pos_m"]), "p1": np.array(obs[-1]["pos_m"]),
+            "bh0": obs[0]["box"][3] - obs[0]["box"][1],
+            "bh1": obs[-1]["box"][3] - obs[-1]["box"][1],
+            "sens0": obs[0].get("sens", 0.0), "sens1": obs[-1].get("sens", 0.0),
+            "v0": _endpoint_velocity(obs, tail=False),
+            "v1": _endpoint_velocity(obs, tail=True),
+        }
+
+    candidates = []
+    for a, ia in info.items():
+        for b, ib in info.items():
+            if a == b or ia["grp"] != ib["grp"] or ia["grp"] is None:
+                continue
+            # Never stitch across a far-field seam: near the horizon one pixel
+            # of noise is meters of position, so a "landed on the prediction"
+            # match there routinely welds two different vehicles together.
+            if ia["sens1"] > max_sens or ib["sens0"] > max_sens or not (np.isfinite(ia["sens1"]) and np.isfinite(ib["sens0"])):
+                continue
+            gap = ib["t0"] - ia["t1"]
+            if not (0.0 < gap <= max_gap_s):
+                continue
+            ratio = ib["bh0"] / max(1e-6, ia["bh1"])
+            if not (0.4 <= ratio <= 2.5):
+                continue
+            va = ia["v1"]
+            sa = float(np.linalg.norm(va))
+            pred = ia["p1"] + va * gap
+            err = float(np.linalg.norm(pred - ib["p0"]))
+            # Gate grows with speed and gap but is capped: a 4 s gap on a fast
+            # track must not open a gate wide enough to swallow the next car.
+            gate = min(10.0, max(3.0, 0.6 * sa * gap + 2.5))
+            if err > gate:
+                continue
+            disp = ib["p0"] - ia["p1"]
+            disp_n = float(np.linalg.norm(disp))
+            if sa > 3.0 and disp_n > 2.0:
+                if float(np.dot(va, disp)) / max(1e-9, sa * disp_n) < 0.2:
+                    continue
+            sb = float(np.linalg.norm(ib["v0"]))
+            if sa > 3.0 and sb > 3.0:
+                if float(np.dot(va, ib["v0"])) / max(1e-9, sa * sb) < 0.3:
+                    continue
+            candidates.append((err + 0.5 * gap, a, b))
+
+    candidates.sort()
+    tail_used: set[int] = set()
+    head_used: set[int] = set()
+    accepted: list[tuple[int, int]] = []
+    for _, a, b in candidates:
+        if a in tail_used or b in head_used:
+            continue
+        tail_used.add(a)
+        head_used.add(b)
+        accepted.append((a, b))
+
+    # Resolve chains (A->B->C) by walking each chain head forward and folding
+    # every continuation into the earliest fragment's id.
+    follow = dict(accepted)
+    merges: list[tuple[int, int]] = []
+    for a in list(follow):
+        if a in head_used:
+            continue  # not a chain head; handled when its own head is walked
+        cur = a
+        while cur in follow:
+            nxt = follow[cur]
+            tracks[a]["obs"].extend(tracks[nxt]["obs"])
+            tracks[a].setdefault("merged_from", []).append(nxt)
+            merges.append((a, nxt))
+            del tracks[nxt]
+            cur = nxt
+        tracks[a]["obs"].sort(key=lambda o: o["t"])
+        _recompute_display_speeds(tracks[a]["obs"])
+    return merges
+
+
+def suppress_simultaneous_duplicates(tracks: dict[int, dict]) -> list[tuple[int, int]]:
+    """Drop parallel ghost tracks riding on the same vehicle.
+
+    Per-frame overlap dedup catches most double boxes, but an offset ghost box
+    (mask split, reflection) can still run alongside the real track. Two real
+    four-wheelers physically cannot hold < 1.2 m center distance for seconds,
+    so a 4w track whose positions sit that close to a longer concurrent 4w
+    track for >= 70% of its observations is marked `duplicate_of` and excluded
+    from reporting. Two-wheelers are exempt: scooters do ride that close.
+    """
+    tids = sorted(tracks, key=lambda t: len(tracks[t]["obs"]), reverse=True)
+    dropped: list[tuple[int, int]] = []
+    for i, big in enumerate(tids):
+        rb = tracks[big]
+        if rb.get("duplicate_of") or CLASS_GROUP.get(rb["cls"]) != "4w":
+            continue
+        tb = np.array([o["t"] for o in rb["obs"]])
+        Pb = np.array([o["pos_m"] for o in rb["obs"]])
+        for small in tids[i + 1:]:
+            rs = tracks[small]
+            if rs.get("duplicate_of") or CLASS_GROUP.get(rs["cls"]) != "4w":
+                continue
+            ts = np.array([o["t"] for o in rs["obs"]])
+            m = (ts >= tb[0]) & (ts <= tb[-1])
+            if m.sum() < 4 or float(ts[m][-1] - ts[m][0]) < 2.0:
+                continue
+            Ps = np.array([o["pos_m"] for o in rs["obs"]])[m]
+            interp = np.column_stack([np.interp(ts[m], tb, Pb[:, ax]) for ax in range(3)])
+            close = np.linalg.norm(Ps - interp, axis=1) < 1.2
+            if close.mean() >= 0.7 and m.sum() >= 0.7 * len(ts):
+                rs["duplicate_of"] = big
+                dropped.append((small, big))
+    return dropped
+
+
 def main() -> None:
     args = parse_args()
     frames_dir = Path(args.frames_dir)
@@ -423,6 +616,7 @@ def main() -> None:
         if result.boxes is not None:
             boxes = result.boxes.xyxy.cpu().numpy()
             clss = result.boxes.cls.cpu().numpy().astype(int)
+            confs = result.boxes.conf.cpu().numpy()
             mask_polys = result.masks.xy if getattr(result, "masks", None) is not None else None
             for di_raw, (box, cls) in enumerate(zip(boxes, clss)):
                 if int(cls) not in VEHICLE_CLASSES:
@@ -450,9 +644,28 @@ def main() -> None:
                 # the per-track median is reported and gates the far_field flag.
                 gp_up = pixel_to_ground_m(gx, gy - 1.0)
                 sens = float(np.linalg.norm(gp_up - gp)) if gp_up is not None else float("inf")
-                dets.append({"cls": VEHICLE_CLASSES[int(cls)], "px": float(gx), "py": float(gy),
+                dets.append({"cls": VEHICLE_CLASSES[int(cls)], "conf": float(confs[di_raw]),
+                             "px": float(gx), "py": float(gy),
                              "box": [float(x1), float(y1), float(x2), float(y2)],
                              "bh": float(y2 - y1), "sens": sens, "pos": gp})
+
+        # One vehicle, one detection: YOLO regularly fires a car box AND a
+        # truck box on the same pixels; each spawned its own track and the
+        # vehicle was counted (and speed-reported) twice. Keep only the
+        # highest-confidence box among same-group detections that overlap
+        # heavily. Overlap is intersection-over-smaller-box, so a nested
+        # double box is caught even when plain IoU is modest.
+        dets.sort(key=lambda d: -d["conf"])
+        deduped: list[dict] = []
+        for det in dets:
+            dup = any(
+                CLASS_GROUP.get(det["cls"]) == CLASS_GROUP.get(k["cls"])
+                and _box_overlap(det["box"], k["box"]) > 0.65
+                for k in deduped
+            )
+            if not dup:
+                deduped.append(det)
+        dets = deduped
 
         # Predict each active track forward and build a gated cost matrix,
         # then solve globally with Hungarian assignment. Greedy NN caused ID
@@ -470,9 +683,26 @@ def main() -> None:
                 # fast mover can never be matched to its own second detection.
                 gate = max(6.0, 26.0 * dt)
             else:
-                gate = max(4.0, speed * dt * 1.6 + 2.0)
+                # The prediction already contains the velocity, so the gate
+                # only needs to cover velocity-estimate error (~25% of speed
+                # per second) plus physically possible acceleration (~4 m/s^2
+                # -> 2*dt^2 meters). The old speed*dt*1.6 gate ballooned to
+                # tens of meters across a multi-second dropout and stitched a
+                # fast track onto a DIFFERENT vehicle near the horizon,
+                # fabricating ~100 km/h fits.
+                gate = max(4.0, 0.25 * speed * dt + 2.0 * dt * dt + 2.0)
+            # Horizon-walk guard: once the track's last observation is
+            # far-field (meters per pixel of noise), its metric position is
+            # fiction, and the acceleration allowance above lets the track
+            # "walk" from a receding car onto an oncoming one in a few steps.
+            # Freeze the gate so a far-field track can only coast to its
+            # natural end instead of hopping vehicles near the horizon.
+            if tr.get("last_sens", 0.0) > args.max_sens_m_per_px:
+                gate = min(gate, 4.0)
             for di, det in enumerate(dets):
-                if det["cls"] != tr["cls"]:
+                # Compare size groups, not raw classes: a car/truck flicker on
+                # the same vehicle must not sever the track (see CLASS_GROUP).
+                if CLASS_GROUP.get(det["cls"]) != CLASS_GROUP.get(tr["cls"]):
                     continue
                 # Apparent-size consistency: a vehicle cannot halve or double
                 # its bbox height between consecutive frames. This blocks the
@@ -522,6 +752,7 @@ def main() -> None:
             tr["pos"] = det["pos"]
             tr["bh"] = det["bh"]
             tr["last_t"] = t_now
+            tr["last_sens"] = det["sens"]
             tr["n_obs"] += 1
             # Display speed over a >=0.6s baseline, not adjacent frames: at
             # 20fps the inter-frame dt is 0.05s, so a few-dozen-cm bbox jitter
@@ -538,7 +769,8 @@ def main() -> None:
                 disp_speed = float(np.linalg.norm(tr["vel"])) * 3.6 if tr["n_obs"] > 3 else 0.0
             hist.append(
                 {"frame": i, "t": t_now, "px": det["px"], "py": det["py"], "box": det["box"],
-                 "pos_m": det["pos"].tolist(), "speed_kmh": disp_speed, "sens": det["sens"]}
+                 "pos_m": det["pos"].tolist(), "speed_kmh": disp_speed, "sens": det["sens"],
+                 "cls": det["cls"], "conf": det["conf"]}
             )
 
         for di, det in enumerate(dets):
@@ -547,21 +779,52 @@ def main() -> None:
             tid = next_id
             next_id += 1
             active.append({"id": tid, "cls": det["cls"], "pos": det["pos"], "vel": np.zeros(3),
-                           "bh": det["bh"], "last_t": t_now, "n_obs": 1})
+                           "bh": det["bh"], "last_t": t_now, "last_sens": det["sens"], "n_obs": 1})
             tracks[tid] = {"cls": det["cls"], "obs": [
                 {"frame": i, "t": t_now, "px": det["px"], "py": det["py"], "box": det["box"],
-                 "pos_m": det["pos"].tolist(), "speed_kmh": 0.0, "sens": det["sens"]}
+                 "pos_m": det["pos"].tolist(), "speed_kmh": 0.0, "sens": det["sens"],
+                 "cls": det["cls"], "conf": det["conf"]}
             ]}
 
         active = [tr for tr in active if t_now - tr["last_t"] <= 3.0]
 
+    merges = stitch_fragments(tracks, max_sens=args.max_sens_m_per_px)
+    if merges:
+        print("stitched fragments (same vehicle, detection dropout): "
+              + ", ".join(f"id{b}->id{a}" for a, b in merges))
+    dups = suppress_simultaneous_duplicates(tracks)
+    if dups:
+        print("suppressed parallel duplicates: "
+              + ", ".join(f"id{s} (ghost of id{b})" for s, b in dups))
+
     rows = []
     for tid, rec in sorted(tracks.items()):
         obs = rec["obs"]
-        if len(obs) < args.min_track_frames:
+        if rec.get("duplicate_of"):
             continue
-        t = np.array([o["t"] for o in obs])
-        P = np.array([o["pos_m"] for o in obs])
+        # Report the majority class over the track's observations: the online
+        # class is just the first frame's guess, and car/truck flicker means
+        # that guess is wrong for a visible fraction of vehicles.
+        votes: dict[str, int] = {}
+        for o in obs:
+            votes[o.get("cls", rec["cls"])] = votes.get(o.get("cls", rec["cls"]), 0) + 1
+        rec["cls"] = max(votes, key=votes.get)
+        # Fit the speed over near-field observations only. A receding vehicle
+        # legitimately coasts into the far field, but positions there are
+        # meter-scale noise: leaving them in the constant-velocity fit dilutes
+        # (or, after a horizon mis-association, corrupts) the trustworthy
+        # near-field measurement. When too little near-field remains, fall
+        # back to the full track, whose high median sensitivity then triggers
+        # the far_field flag: reported, but with no speed number.
+        near = [o for o in obs
+                if np.isfinite(o.get("sens", 0.0)) and o.get("sens", 0.0) <= args.max_sens_m_per_px]
+        use_near = (len(near) >= args.min_track_frames
+                    and (near[-1]["t"] - near[0]["t"]) >= args.min_track_seconds)
+        fit_obs = near if use_near else obs
+        if len(fit_obs) < args.min_track_frames:
+            continue
+        t = np.array([o["t"] for o in fit_obs])
+        P = np.array([o["pos_m"] for o in fit_obs])
         duration = float(t[-1] - t[0])
         if duration < args.min_track_seconds:
             continue
@@ -600,7 +863,7 @@ def main() -> None:
                 var_v += (v_hat[axis] / v_norm) ** 2 * se2
         ci_ms = float(np.hypot(1.96 * np.sqrt(var_v), 1.96 * speed_ms * args.scale_cv))
 
-        sens_arr = np.array([o.get("sens", 0.0) for o in obs], dtype=np.float64)
+        sens_arr = np.array([o.get("sens", 0.0) for o in fit_obs], dtype=np.float64)
         sens_med = float(np.median(sens_arr[np.isfinite(sens_arr)])) if np.isfinite(sens_arr).any() else 99.0
         if not np.isfinite(sens_med):
             sens_med = 99.0
@@ -613,7 +876,7 @@ def main() -> None:
         rows.append({
             "track_id": tid,
             "class": rec["cls"],
-            "n_frames": len(obs),
+            "n_frames": len(fit_obs),
             "duration_s": round(duration, 2),
             "path_m": round(path_len, 1),
             "disp_m": round(disp_m, 1),
