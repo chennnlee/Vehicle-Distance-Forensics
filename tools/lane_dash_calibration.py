@@ -216,6 +216,20 @@ def height_above_plane(p: np.ndarray, gp: dict[str, float]) -> float:
     return abs(float(p[1] - (gp["a"] * p[0] + gp["b"] * p[2] + gp["c"])))
 
 
+def flag_gaps(ratios: list[float], target: float) -> list[str]:
+    """Label each measured gap/dash ratio against the spec: matching the
+    adjacent-gap ratio, the one-dash-missing ratio (2*target+1), or neither."""
+    flags = []
+    for ratio in ratios:
+        if abs(ratio - target) / target < 0.25:
+            flags.append("adjacent_ok")
+        elif abs(ratio - (2 * target + 1)) / (2 * target + 1) < 0.25:
+            flags.append("one_dash_missing_ok")
+        else:
+            flags.append("ratio_mismatch")
+    return flags
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Estimate a SHARP point-cloud scale factor from legally-specified lane dash lengths, "
@@ -404,13 +418,7 @@ def main() -> None:
         if spec_id is not None:
             spec = MARKING_SPECS[spec_id]
             target = spec["gap_m"] / spec["dash_m"]
-            for ratio in measured_ratios:
-                if abs(ratio - target) / target < 0.25:
-                    gap_flags.append("adjacent_ok")
-                elif abs(ratio - (2 * target + 1)) / (2 * target + 1) < 0.25:
-                    gap_flags.append("one_dash_missing_ok")
-                else:
-                    gap_flags.append("ratio_mismatch")
+            gap_flags = flag_gaps(measured_ratios, target)
             scale = spec["dash_m"] / median_len
 
             # Post-calibration ground re-check in REAL meters. The raw-unit
@@ -441,6 +449,7 @@ def main() -> None:
                         median_len_px = float(np.median([r["length_px"] for r in dash_rows]))
                         scale = spec["dash_m"] / median_len
                         measured_ratios = [g / median_len for g in gaps]
+                        gap_flags = flag_gaps(measured_ratios, target)
                     else:
                         spec_id = None
                         scale = None

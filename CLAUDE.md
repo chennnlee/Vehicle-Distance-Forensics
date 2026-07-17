@@ -43,6 +43,17 @@ NVR 串流謊報 fps → OSD 時鐘秒跳定時(無 OSD 用 --fps)。YOLOv8m-seg
   82 真速讀 146 案例)、sub-octave 修正(國道貓眼每隔一根 dash=20m 子結構讓 argmax 直接選 2L 半速;
   lag/2 有局部峰且 ≥0.6×ac[lag] 就取回)、分裂鎖閘(cand 分歧 >1.5× 時兩點「中位」=平均出幻速,
   改取多數群否則拒發)。跨列相位「速度」閘試過拆掉(週期訊號 xcorr 多峰不可辨,會誤殺好段)。
+  **⚠ 2026-07-16 稽核發現(`data/output/odometer_lag_audit/`)**:八度防護觸發後 98–100% 被
+  sub-octave 撤銷(五 demo 實測),thr 0.75/0.95 最終輸出中位差 0.00 → 防護+旗標實質死碼;
+  「鄰道虛線+真速≲77km/h」情境合成測試會輸出高信心雙倍速(54→108,全防護鏈攔不住),
+  待重構為一次性基頻選擇(候選 {L/2,L,2L} 諧波評分+pulse x-offset 雙峰判線)。
+  副產品:dc008 封存輸出 t≈18.4s 的 28.4km/h 是舊碼半速錯(GPS=57),現行碼已自動修好。
+  觸發統計已插桩(`dash_cycle_speeds(..., lag_events=)`,純觀測),稽核工具 `tools/odometer_lag_audit.py`。
+- **追蹤器 v3 移植(2026-07-16)**:CCTV v3 的類別群組關聯/同幀重複框抑制/斷軌縫合(2D 相對平面版,
+  gap≤2s、遠場縫合禁止)/平行鬼影抑制/多數決類別已移植進管線 B;targets_summary.csv 由管線正式輸出
+  (近場中位速 + 遠場粗估分欄,遠場不再混入主數字)。A/B:dc007/dc006 重跑在 `dashcam_demo/*_trackv3/`,
+  近場速度與封存一致,dc006 89 目標=29 近場可信+45 遠場粗估+15 無速;dc007 紅車三段維持誠實分段
+  (貼身空窗 CV 預測誤差>gate 正確拒縫),但逃逸尾段縫合多接 1.3s(id152+202,merged_from 稽核)。
 - 光流**不給任何速度值**(震動/夜間會把 60km/h 讀成 2);停止=路面帶幀差變化比例<0.02 且碼表訊號活動度<3。
 - 他車:接地點→平面→跟車距離;絕對速=自車速+d(range)/dt;無自車速時只給距離。
 - 無讀值誠實標 no lock,只內插 ≤2s 空隙。
@@ -121,7 +132,10 @@ NVR 串流謊報 fps → OSD 時鐘秒跳定時(無 OSD 用 --fps)。YOLOv8m-seg
 近地平線遠場、螢幕翻拍摩爾紋、貼地視角虛線 3D 取樣、碼表對加速段(chirp,解析度~3s)、
 超短片(<8s)片尾窗截斷、近停時旁車車流過帶假鎖、LK 光流測速(任何裝置都別信)、
 換道期間碼表(掃過非法定標線,線位閘會拒發=誠實 no-lock)、貼身目標車(接地點低於 hood 線,
-如 dc007 紅車 8-9.3s 貼右側時無法量)。
+如 dc007 紅車 8-9.3s 貼右側時無法量)、**急煞交會段的 dashcam 目標 id**(2026-07-16 使用者目視
+dc007_trackv3 證實:7.5–11s 急煞俯仰破壞平面假設(藍車 fwd 在 27–33m 跳動)+紅車切入與藍車
+影像交會 → id152/157 在兩台車間反覆互換,皆非單一車輛純軌跡;封存版 166/171 同病。
+修法方向:關聯加影像空間 px 一致性閘防跨車互換,改動需整批重驗)。
 
 ## 待辦/下一步
 
@@ -153,3 +167,17 @@ NVR 串流謊報 fps → OSD 時鐘秒跳定時(無 OSD 用 --fps)。YOLOv8m-seg
 產生器 `~/tmp/report_build/build_report.py`,python-docx + Word COM 轉檔 QA)——
 **待使用者補:姓名/系所/指導教授/執行期間、參考文獻正式編號,並審閱內文。**
 - 使用者尚未確認 v3 影片觀感(框跳動/重複計數是否解決);v3 程式碼已 commit(2026-07-13)
+- **碼表八度邏輯重構**(2026-07-16 稽核已定案,見管線 B ⚠):迴歸基準=odometer_lag_audit 五案;
+  重構後用同工具補測 20251029 批量六案(皆預設 thr)
+- dc008 重跑(現行碼修好封存半速段,MAE 6.2 會改善);dc002/dc003 可順便重跑出 _trackv3
+- ~~dc007 紅車尾段 id 鏈確認~~ → 2026-07-16 使用者目視:7.5–11s id152/157 兩車互換(見失效邊界),
+  dashcam_demo/README 的「紅車 id20→105→171 全程可追」敘述需改為誠實三段+尾段互換警語;
+  dc006_trackv3 觀感仍待確認後決定是否取代正式資料夾
+- **dashcam 關聯 px 一致性閘**(防急煞段跨車 id 互換,見失效邊界;改後 dc006/007 重驗)
+- 本次改動(追蹤移植+插桩+gap_flags 修正+新工具+README 重寫)尚未 commit;
+  **legacy 刪除被權限擋下待使用者執行**(清單:main.py、bevformer_runner.py、core/、
+  utils/{bevheight,ipm_bev,simple_bev,visualizer,evaluation}.py、tools/{monolayout_demo,
+  sharp_to_bev,ground_bev_render,enhance_bev_image,bevformer_yolo_fusion_judge,
+  bevformer_detector_replaced_by_yolov8}.py、docs/BEVFORMER_ENV_SETUP.md、depth_models/(8.2GB)、
+  tools/BEVFormer/(未追蹤,已 tar 備份於 scratchpad);保留 sharp_yolo_distance/
+  detect_plate_anchor/refine_anchor_point(現行方法族)

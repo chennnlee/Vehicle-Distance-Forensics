@@ -20,6 +20,25 @@ from lane_dash_calibration import fit_ground_plane_raw
 
 VEHICLE_CLASSES = {2: "car", 3: "motorcycle", 5: "bus", 7: "truck"}
 
+# Same lesson as the CCTV v3 tracker: YOLO flickers between car/truck/bus on
+# ONE vehicle, so association and duplicate suppression must compare size
+# groups, not raw classes, or every flicker cuts the track and the target is
+# reported twice (dc007's red car lived as id20->id105->id171 partly for this
+# reason). Two-wheelers stay separate: a scooter filtering past a car must
+# never inherit its track.
+CLASS_GROUP = {"car": "4w", "bus": "4w", "truck": "4w", "motorcycle": "2w"}
+
+
+def _box_overlap(a: list[float], b: list[float]) -> float:
+    """Intersection over the SMALLER box area -- catches nested double boxes
+    (car box inside a truck box on the same vehicle) that plain IoU misses."""
+    ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    inter = ix * iy
+    area_a = max(1e-6, (a[2] - a[0]) * (a[3] - a[1]))
+    area_b = max(1e-6, (b[2] - b[0]) * (b[3] - b[1]))
+    return inter / min(area_a, area_b)
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -169,7 +188,8 @@ def extract_odometer_signals(frames: list[Path], points: list[tuple[int, int]]) 
 
 def dash_cycle_speeds(frames: list[Path], points: list[tuple[int, int]], cycle_m: float,
                       fps: float, window_s: float, sig: dict | None = None,
-                      octave_threshold: float = 0.75) -> tuple[np.ndarray, np.ndarray]:
+                      octave_threshold: float = 0.75,
+                      lag_events: list | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Ego speed from the legal dash cycle streaming past fixed image spots.
 
     The lane paint is a legal-length periodic pattern (dash+gap), so the
@@ -177,7 +197,14 @@ def dash_cycle_speeds(frames: list[Path], points: list[tuple[int, int]], cycle_m
     v / cycle_m Hz. A sliding autocorrelation finds the period; the speed
     needs no scale factor, no ground plane, and no undistortion -- the only
     inputs are the statutory cycle length and the frame rate. Returns
-    (speed_ms, confidence=autocorr peak) per frame, NaN where no clear peak.
+    (speed_ms, confidence=autocorr peak, peak_prominence) per frame, NaN/0
+    where no clear peak.
+
+    `lag_events`, when given, collects one dict per surviving per-point
+    candidate recording the lag BEFORE and AFTER each correction (argmax ->
+    octave guard -> sub-octave). Observation only -- it never changes a
+    value -- but it is the audit trail for how often the two corrections
+    fire (and cancel each other) on real footage.
     """
     if sig is None:
         sig = extract_odometer_signals(frames, points)
@@ -234,6 +261,7 @@ def dash_cycle_speeds(frames: list[Path], points: list[tuple[int, int]], cycle_m
             if hi <= lo:
                 continue
             lag = lo + int(np.argmax(ac[lo:hi]))
+            lag_argmax = lag
             # Octave guard: neighboring-lane dashes or sub-structure in the
             # pattern can raise a HARMONIC above the true period, doubling the
             # speed. If the double lag correlates almost as well, it is the
@@ -244,6 +272,7 @@ def dash_cycle_speeds(frames: list[Path], points: list[tuple[int, int]], cycle_m
                     lag = dbl
                 else:
                     break
+            lag_octave = lag
             # Sub-octave correction: freeway lane dashes carry a retro-
             # reflective road stud on every OTHER dash (20 m spacing), and on
             # the near rows the stud outshines the paint, so the argmax lands
@@ -258,10 +287,19 @@ def dash_cycle_speeds(frames: list[Path], points: list[tuple[int, int]], cycle_m
                         and ac[h] >= 0.6 * ac[lag]:
                     lag = h
                     break
+            lag_suboct = lag
             # Peak-prominence gate: a genuine dash lock rises from a real
             # valley (measured prominence 0.7-1.1); the broad shoulder of a
             # non-periodic bursty signal barely rises above it (0.00-0.03).
-            if float(ac[lag] - ac[first_min]) < 0.3:
+            prominent = float(ac[lag] - ac[first_min]) >= 0.3
+            if lag_events is not None:
+                lag_events.append({
+                    "frame": i, "point_y": pt[1],
+                    "lag_argmax": int(lag_argmax), "lag_octave": int(lag_octave),
+                    "lag_suboct": int(lag_suboct),
+                    "ac_final": float(ac[lag]), "prominent": prominent,
+                })
+            if not prominent:
                 continue
             c = float(ac[lag])
             lag_f = float(lag)
@@ -308,6 +346,145 @@ def dash_cycle_speeds(frames: list[Path], points: list[tuple[int, int]], cycle_m
     return v, conf, prom
 
 
+def _endpoint_velocity_2d(obs: list[dict], tail: bool, window_s: float = 1.0) -> np.ndarray:
+    """Constant-velocity fit over a fragment's first/last `window_s` seconds
+    of RELATIVE (lat, fwd) positions."""
+    t = np.array([o["t"] for o in obs])
+    P = np.array([[o["lat_m"], o["fwd_m"]] for o in obs])
+    m = (t >= t[-1] - window_s) if tail else (t <= t[0] + window_s)
+    if m.sum() < 3 or float(t[m][-1] - t[m][0]) < 0.2:
+        return np.zeros(2)
+    A = np.column_stack([t[m] - t[m][0], np.ones(int(m.sum()))])
+    return np.array([np.linalg.lstsq(A, P[m][:, ax], rcond=None)[0][0] for ax in range(2)])
+
+
+def stitch_fragments(tracks: dict[int, dict], max_gap_s: float = 2.0,
+                     max_sens: float = 0.8) -> list[tuple[int, int]]:
+    """Rejoin track fragments that are the same physical vehicle (CCTV v3
+    port, adapted to the ego-relative plane).
+
+    A detection dropout longer than the tracker's 0.8 s active window kills
+    the track; the target then re-enters as a fresh id and appears twice in
+    the report. Fragment B continues fragment A when A's constant-velocity
+    prediction lands on B's first observation under physical gates (size
+    group, bbox-height ratio, endpoint-velocity agreement). The gap is capped
+    tighter than on CCTV: relative velocity changes with EGO braking too, so
+    a long constant-velocity extrapolation in this plane is less trustworthy.
+    Accepted joins are recorded in `merged_from` for audit.
+    """
+    info: dict[int, dict] = {}
+    for tid, rec in tracks.items():
+        obs = sorted(rec["obs"], key=lambda o: o["t"])
+        rec["obs"] = obs
+        info[tid] = {
+            "grp": CLASS_GROUP.get(rec["cls"]),
+            "t0": obs[0]["t"], "t1": obs[-1]["t"],
+            "p0": np.array([obs[0]["lat_m"], obs[0]["fwd_m"]]),
+            "p1": np.array([obs[-1]["lat_m"], obs[-1]["fwd_m"]]),
+            "bh0": obs[0].get("bh", obs[0]["box"][3] - obs[0]["box"][1]),
+            "bh1": obs[-1].get("bh", obs[-1]["box"][3] - obs[-1]["box"][1]),
+            "sens0": obs[0].get("sens", 0.0), "sens1": obs[-1].get("sens", 0.0),
+            "v0": _endpoint_velocity_2d(obs, tail=False),
+            "v1": _endpoint_velocity_2d(obs, tail=True),
+        }
+
+    candidates = []
+    for a, ia in info.items():
+        for b, ib in info.items():
+            if a == b or ia["grp"] != ib["grp"] or ia["grp"] is None:
+                continue
+            # Far-range seams are geometric noise; never stitch across them.
+            if not (np.isfinite(ia["sens1"]) and np.isfinite(ib["sens0"])):
+                continue
+            if ia["sens1"] > max_sens or ib["sens0"] > max_sens:
+                continue
+            gap = ib["t0"] - ia["t1"]
+            if not (0.0 < gap <= max_gap_s):
+                continue
+            ratio = ib["bh0"] / max(1e-6, ia["bh1"])
+            if not (0.4 <= ratio <= 2.5):
+                continue
+            va = ia["v1"]
+            sa = float(np.linalg.norm(va))
+            pred = ia["p1"] + va * gap
+            err = float(np.linalg.norm(pred - ib["p0"]))
+            # Relative-plane gate: covers velocity-estimate error plus the
+            # relative acceleration ego/target braking can add over the gap,
+            # capped so a gap never opens wide enough to swallow another car.
+            gate = min(6.0, max(1.5, 0.5 * sa * gap + 1.5 * gap * gap + 1.0))
+            if err > gate:
+                continue
+            disp = ib["p0"] - ia["p1"]
+            disp_n = float(np.linalg.norm(disp))
+            if sa > 2.0 and disp_n > 1.5:
+                if float(np.dot(va, disp)) / max(1e-9, sa * disp_n) < 0.2:
+                    continue
+            sb = float(np.linalg.norm(ib["v0"]))
+            if sa > 2.0 and sb > 2.0:
+                if float(np.dot(va, ib["v0"])) / max(1e-9, sa * sb) < 0.3:
+                    continue
+            candidates.append((err + 0.5 * gap, a, b))
+
+    candidates.sort()
+    tail_used: set[int] = set()
+    head_used: set[int] = set()
+    accepted: list[tuple[int, int]] = []
+    for _, a, b in candidates:
+        if a in tail_used or b in head_used:
+            continue
+        tail_used.add(a)
+        head_used.add(b)
+        accepted.append((a, b))
+
+    follow = dict(accepted)
+    merges: list[tuple[int, int]] = []
+    for a in list(follow):
+        if a in head_used:
+            continue  # not a chain head; handled when its own head is walked
+        cur = a
+        while cur in follow:
+            nxt = follow[cur]
+            tracks[a]["obs"].extend(tracks[nxt]["obs"])
+            tracks[a].setdefault("merged_from", []).append(nxt)
+            merges.append((a, nxt))
+            del tracks[nxt]
+            cur = nxt
+        tracks[a]["obs"].sort(key=lambda o: o["t"])
+    return merges
+
+
+def suppress_simultaneous_duplicates(tracks: dict[int, dict]) -> list[tuple[int, int]]:
+    """Drop parallel ghost tracks riding on the same vehicle (CCTV v3 port).
+
+    Two real four-wheelers cannot hold < 1.2 m center distance for a second;
+    a 4w track that shadows a longer concurrent 4w track that closely for
+    >= 70% of its observations is a mask-split/reflection ghost. Two-wheelers
+    are exempt: scooters do filter that close."""
+    tids = sorted(tracks, key=lambda t: len(tracks[t]["obs"]), reverse=True)
+    dropped: list[tuple[int, int]] = []
+    for i, big in enumerate(tids):
+        rb = tracks[big]
+        if rb.get("duplicate_of") or CLASS_GROUP.get(rb["cls"]) != "4w":
+            continue
+        tb = np.array([o["t"] for o in rb["obs"]])
+        Pb = np.array([[o["lat_m"], o["fwd_m"]] for o in rb["obs"]])
+        for small in tids[i + 1:]:
+            rs = tracks[small]
+            if rs.get("duplicate_of") or CLASS_GROUP.get(rs["cls"]) != "4w":
+                continue
+            ts = np.array([o["t"] for o in rs["obs"]])
+            m = (ts >= tb[0]) & (ts <= tb[-1])
+            if m.sum() < 8 or float(ts[m][-1] - ts[m][0]) < 1.0:
+                continue
+            Ps = np.array([[o["lat_m"], o["fwd_m"]] for o in rs["obs"]])[m]
+            interp = np.column_stack([np.interp(ts[m], tb, Pb[:, ax]) for ax in range(2)])
+            close = np.linalg.norm(Ps - interp, axis=1) < 1.2
+            if close.mean() >= 0.7 and m.sum() >= 0.7 * len(ts):
+                rs["duplicate_of"] = big
+                dropped.append((small, big))
+    return dropped
+
+
 def main() -> None:
     args = parse_args()
     frames = sorted(Path(args.frames_dir).glob("*.jpg")) + sorted(Path(args.frames_dir).glob("*.png"))
@@ -343,6 +520,7 @@ def main() -> None:
         if result.boxes is not None:
             boxes = result.boxes.xyxy.cpu().numpy()
             clss = result.boxes.cls.cpu().numpy().astype(int)
+            confs = result.boxes.conf.cpu().numpy()
             mask_polys = result.masks.xy if getattr(result, "masks", None) is not None else None
             for di, (box, cls) in enumerate(zip(boxes, clss)):
                 if int(cls) not in VEHICLE_CLASSES:
@@ -365,10 +543,24 @@ def main() -> None:
                     continue
                 up = pixel_to_plane(gx, gy - 1.0)
                 sens = float(np.linalg.norm(up - pos)) if up is not None else float("inf")
-                dets.append({"cls": VEHICLE_CLASSES[int(cls)], "px": float(gx), "py": float(gy),
+                dets.append({"cls": VEHICLE_CLASSES[int(cls)], "conf": float(confs[di]),
+                             "px": float(gx), "py": float(gy),
                              "box": [float(x1), float(y1), float(x2), float(y2)],
                              "bh": float(y2 - y1), "pos": pos, "sens": sens})
-        per_frame_dets.append(dets)
+        # One vehicle, one detection (ported from CCTV v3): a car box and a
+        # truck box regularly fire on the same pixels; keep only the highest-
+        # confidence box among heavily overlapping same-group detections.
+        dets.sort(key=lambda d: -d["conf"])
+        deduped: list[dict] = []
+        for det in dets:
+            dup = any(
+                CLASS_GROUP.get(det["cls"]) == CLASS_GROUP.get(k["cls"])
+                and _box_overlap(det["box"], k["box"]) > 0.65
+                for k in deduped
+            )
+            if not dup:
+                deduped.append(det)
+        per_frame_dets.append(deduped)
         if prev_gray is not None:
             motion_raw.append(road_change_fraction(prev_gray, gray, boxes_px, args.hood_y))
         prev_gray = gray
@@ -459,7 +651,9 @@ def main() -> None:
             pred = tr["pos"] + tr["vel"] * step_dt
             gate = 2.0 + 8.0 * step_dt  # relative speeds are small at 30fps
             for di, det in enumerate(dets):
-                if det["cls"] != tr["cls"]:
+                # Group comparison, not raw class: car/truck flicker on the
+                # same vehicle must not sever the track (see CLASS_GROUP).
+                if CLASS_GROUP.get(det["cls"]) != CLASS_GROUP.get(tr["cls"]):
                     continue
                 if det["bh"] / max(1e-6, tr["bh"]) > 1.6 or det["bh"] / max(1e-6, tr["bh"]) < 0.6:
                     continue
@@ -485,7 +679,8 @@ def main() -> None:
                 tr["n_obs"] += 1
                 tracks[tr["id"]]["obs"].append({"frame": i, "t": t_now, "px": det["px"], "py": det["py"],
                                                 "box": det["box"], "lat_m": float(det["pos"][0]),
-                                                "fwd_m": float(det["pos"][1]), "sens": det["sens"]})
+                                                "fwd_m": float(det["pos"][1]), "sens": det["sens"],
+                                                "cls": det["cls"], "bh": det["bh"]})
         for di, det in enumerate(dets):
             if di in used_d:
                 continue
@@ -495,8 +690,26 @@ def main() -> None:
                            "bh": det["bh"], "last_t": t_now, "n_obs": 1})
             tracks[tid] = {"cls": det["cls"], "obs": [{"frame": i, "t": t_now, "px": det["px"], "py": det["py"],
                                                        "box": det["box"], "lat_m": float(det["pos"][0]),
-                                                       "fwd_m": float(det["pos"][1]), "sens": det["sens"]}]}
+                                                       "fwd_m": float(det["pos"][1]), "sens": det["sens"],
+                                                       "cls": det["cls"], "bh": det["bh"]}]}
         active = [tr for tr in active if t_now - tr["last_t"] <= 0.8]
+
+    merges = stitch_fragments(tracks, max_sens=args.max_sens_m_per_px)
+    if merges:
+        print("stitched fragments (same vehicle, detection dropout): "
+              + ", ".join(f"id{b}->id{a}" for a, b in merges))
+    dups = suppress_simultaneous_duplicates(tracks)
+    if dups:
+        print("suppressed parallel duplicates: "
+              + ", ".join(f"id{s} (ghost of id{b})" for s, b in dups))
+    # Majority class over the track's observations: the stored class is just
+    # the first frame's guess, wrong for a visible share of vehicles.
+    for rec in tracks.values():
+        votes: dict[str, int] = {}
+        for o in rec["obs"]:
+            c = o.get("cls", rec["cls"])
+            votes[c] = votes.get(c, 0) + 1
+        rec["cls"] = max(votes, key=votes.get)
 
     # --- per-track series: range, relative rate, absolute speed -------------
     win = max(5, int(round(args.fps * 1.0)) | 1)  # 1 s sliding fit window
@@ -530,12 +743,39 @@ def main() -> None:
         w = csv.writer(fh)
         w.writerow(["track_id", "class", "frame_idx", "t_s", "range_m", "lat_m", "rel_ms", "abs_kmh", "sens_m_per_px"])
         for tid, rec in sorted(tracks.items()):
-            if len(rec["obs"]) < int(args.fps):  # keep tracks >= 1 s
+            if len(rec["obs"]) < int(args.fps) or rec.get("duplicate_of"):  # keep real tracks >= 1 s
                 continue
             for o in rec["obs"]:
                 abs_s = f"{o['abs_kmh']:.1f}" if o["abs_kmh"] is not None else ""
                 w.writerow([tid, rec["cls"], o["frame"], f"{o['t']:.3f}", f"{o['fwd_m']:.2f}",
                             f"{o['lat_m']:.2f}", f"{o['rel_ms']:.2f}", abs_s, f"{o['sens']:.3f}"])
+
+    # Per-target one-line summaries (report table): when/where each target was
+    # measurable and its median absolute speed over trusted (near-range) obs.
+    sum_csv = out_dir / "targets_summary.csv"
+    with sum_csv.open("w", newline="", encoding="utf-8") as fh:
+        w = csv.writer(fh)
+        # abs_speed_median_kmh uses NEAR-range obs only, matching the video's
+        # far-range policy (no printed speed past the sensitivity threshold).
+        # The far-range median goes in its own clearly-named column instead of
+        # being silently mixed in: those positions carry meters of per-pixel
+        # noise, so the number is a rough estimate, not a measurement.
+        w.writerow(["track_id", "class", "t_start_s", "t_end_s", "range_min_m", "range_max_m",
+                    "abs_speed_median_kmh", "abs_speed_median_far_kmh", "n_obs", "merged_from"])
+        for tid, rec in sorted(tracks.items()):
+            obs = rec["obs"]
+            if len(obs) < int(args.fps) or rec.get("duplicate_of"):
+                continue
+            fwd = [o["fwd_m"] for o in obs]
+            near = [o["abs_kmh"] for o in obs
+                    if o["abs_kmh"] is not None and np.isfinite(o["sens"]) and o["sens"] <= args.max_sens_m_per_px]
+            far = [o["abs_kmh"] for o in obs
+                   if o["abs_kmh"] is not None and not (np.isfinite(o["sens"]) and o["sens"] <= args.max_sens_m_per_px)]
+            med_near = f"{np.median(near):.1f}" if near else ""
+            med_far = f"{np.median(far):.1f}" if far else ""
+            merged = "+".join(str(m) for m in rec.get("merged_from", []))
+            w.writerow([tid, rec["cls"], f"{obs[0]['t']:.1f}", f"{obs[-1]['t']:.1f}",
+                        f"{min(fwd):.1f}", f"{max(fwd):.1f}", med_near, med_far, len(obs), merged])
 
     (out_dir / "tracks.json").write_text(json.dumps(
         {"ground_plane": ground, "scale": args.pointcloud_scale,
@@ -558,7 +798,7 @@ def main() -> None:
     writer = cv2.VideoWriter(str(video_path), cv2.VideoWriter_fourcc(*"mp4v"), args.fps, (img_w, img_h))
     frame_obs: dict[int, list[tuple[int, dict, str]]] = {}
     for tid, rec in tracks.items():
-        if len(rec["obs"]) < int(args.fps):
+        if len(rec["obs"]) < int(args.fps) or rec.get("duplicate_of"):
             continue
         for o in rec["obs"]:
             frame_obs.setdefault(o["frame"], []).append((tid, o, rec["cls"]))
