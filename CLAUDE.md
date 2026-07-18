@@ -49,11 +49,15 @@ NVR 串流謊報 fps → OSD 時鐘秒跳定時(無 OSD 用 --fps)。YOLOv8m-seg
   待重構為一次性基頻選擇(候選 {L/2,L,2L} 諧波評分+pulse x-offset 雙峰判線)。
   副產品:dc008 封存輸出 t≈18.4s 的 28.4km/h 是舊碼半速錯(GPS=57),現行碼已自動修好。
   觸發統計已插桩(`dash_cycle_speeds(..., lag_events=)`,純觀測),稽核工具 `tools/odometer_lag_audit.py`。
-- **追蹤器 v3 移植(2026-07-16)**:CCTV v3 的類別群組關聯/同幀重複框抑制/斷軌縫合(2D 相對平面版,
-  gap≤2s、遠場縫合禁止)/平行鬼影抑制/多數決類別已移植進管線 B;targets_summary.csv 由管線正式輸出
-  (近場中位速 + 遠場粗估分欄,遠場不再混入主數字)。A/B:dc007/dc006 重跑在 `dashcam_demo/*_trackv3/`,
-  近場速度與封存一致,dc006 89 目標=29 近場可信+45 遠場粗估+15 無速;dc007 紅車三段維持誠實分段
-  (貼身空窗 CV 預測誤差>gate 正確拒縫),但逃逸尾段縫合多接 1.3s(id152+202,merged_from 稽核)。
+- **追蹤器 v3 移植(2026-07-16,已 commit 8c2e992)**:CCTV v3 的類別群組關聯/同幀重複框抑制/
+  斷軌縫合(2D 相對平面版,gap≤2s、遠場縫合禁止)/平行鬼影抑制/多數決類別已移植進管線 B;
+  targets_summary.csv 由管線正式輸出(近場中位速 + 遠場粗估分欄,遠場不再混入主數字)。
+  **五支 demo 全部重跑在 `dashcam_demo/*_trackv3/`(2026-07-18)**,近場速度與封存一致:
+  dc006 89 目標=29 近場+45 遠場粗估+15 無速;dc007 紅車三段誠實分段(貼身空窗正確拒縫);
+  dc008 半速段修復實證(t18.4s 舊 28.4→新 56.8,GPS OSD=57,舊版連他車速度都被拉低一半);
+  dc002 油罐車 id3 單軌 0–12.6s(62.7 km/h vs 自車 GPS 58–59,舊版 10.5s 斷軌後誤判 car);
+  dc003 62 目標 55 台近場有速,最長單軌 18.8s。新舊逐幀對照圖做過(dc008/dc002),
+  差異在時間軸記帳與數字誠實性,單幀畫面本來就該一致(迴歸安全)。
 - 光流**不給任何速度值**(震動/夜間會把 60km/h 讀成 2);停止=路面帶幀差變化比例<0.02 且碼表訊號活動度<3。
 - 他車:接地點→平面→跟車距離;絕對速=自車速+d(range)/dt;無自車速時只給距離。
 - 無讀值誠實標 no lock,只內插 ≤2s 空隙。
@@ -167,17 +171,18 @@ dc007_trackv3 證實:7.5–11s 急煞俯仰破壞平面假設(藍車 fwd 在 27�
 產生器 `~/tmp/report_build/build_report.py`,python-docx + Word COM 轉檔 QA)——
 **待使用者補:姓名/系所/指導教授/執行期間、參考文獻正式編號,並審閱內文。**
 - 使用者尚未確認 v3 影片觀感(框跳動/重複計數是否解決);v3 程式碼已 commit(2026-07-13)
-- **碼表八度邏輯重構**(2026-07-16 稽核已定案,見管線 B ⚠):迴歸基準=odometer_lag_audit 五案;
-  重構後用同工具補測 20251029 批量六案(皆預設 thr)
-- dc008 重跑(現行碼修好封存半速段,MAE 6.2 會改善);dc002/dc003 可順便重跑出 _trackv3
-- ~~dc007 紅車尾段 id 鏈確認~~ → 2026-07-16 使用者目視:7.5–11s id152/157 兩車互換(見失效邊界),
-  dashcam_demo/README 的「紅車 id20→105→171 全程可追」敘述需改為誠實三段+尾段互換警語;
-  dc006_trackv3 觀感仍待確認後決定是否取代正式資料夾
-- **dashcam 關聯 px 一致性閘**(防急煞段跨車 id 互換,見失效邊界;改後 dc006/007 重驗)
-- 本次改動(追蹤移植+插桩+gap_flags 修正+新工具+README 重寫)尚未 commit;
-  **legacy 刪除被權限擋下待使用者執行**(清單:main.py、bevformer_runner.py、core/、
-  utils/{bevheight,ipm_bev,simple_bev,visualizer,evaluation}.py、tools/{monolayout_demo,
-  sharp_to_bev,ground_bev_render,enhance_bev_image,bevformer_yolo_fusion_judge,
-  bevformer_detector_replaced_by_yolov8}.py、docs/BEVFORMER_ENV_SETUP.md、depth_models/(8.2GB)、
-  tools/BEVFormer/(未追蹤,已 tar 備份於 scratchpad);保留 sharp_yolo_distance/
-  detect_plate_anchor/refine_anchor_point(現行方法族)
+**下一步優先序(2026-07-18,新對話從這裡接)**:
+1. **碼表八度邏輯重構**(稽核已定案,見管線 B ⚠):一次性基頻選擇(候選 {L/2,L,2L} 諧波評分
+   +pulse x-offset 雙峰判線);迴歸基準=odometer_lag_audit 五案(thr 無關的現行輸出);
+   重構後用同工具補測 20251029 批量六案(皆預設 thr)。**要在收市區新素材前完成**
+   (雙倍速地雷正好在市區低速多車道情境)。
+2. **dashcam 關聯 px 一致性閘**(防急煞段跨車 id 互換,見失效邊界;改後 dc006/007 重驗)。
+3. `dashcam_demo/README.md` 重寫:紅車敘述改誠實版(三段+尾段 id 互換警語)、dc008 半速修復、
+   近/遠分層數字(89=29+45+15 取代「77 台可測」);使用者確認觀感後把 *_trackv3 轉正
+   (五支皆已重跑,見管線 B)。
+4. 素材缺口照舊:「汽車目標+路人視角」(WOWtchout 公開影片/海盛汽車目標案/白天 TDX 重錄)。
+5. legacy 已清(commit 842abaa,depth_models 8.2GB 等;tools/BEVFormer tar 備份在 scratchpad,
+   /tmp 重啟即失);主 README.md 已重寫為兩管線門面。
+   保留 sharp_yolo_distance/detect_plate_anchor/refine_anchor_point(現行方法族)。
+6. /tmp 幀目錄 WSL 重啟就消失:五支 demo 可從各資料夾 original_clip_h264.mp4 重建
+   (指令見「重要路徑」;本次 dc002 600/dc003 1798/dc006 1801/dc007 330/dc008 600 幀已驗證對齊)。
