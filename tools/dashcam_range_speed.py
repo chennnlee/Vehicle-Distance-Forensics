@@ -71,12 +71,10 @@ def parse_args() -> argparse.Namespace:
                         "4m + 8m = 12m on freeways.")
     parser.add_argument("--odometer-window-s", type=float, default=3.0, help="Sliding autocorrelation window.")
     parser.add_argument("--octave-threshold", type=float, default=0.75,
-                        help="Octave-guard ratio: double the picked lag when ac[2*lag] >= this * ac[lag]. "
-                        "The default 0.75 catches interleaved neighboring-lane dashes (true period = double). "
-                        "But on clean cruising footage the finite-window autocorrelation of the TRUE period "
-                        "still decays only to ~(W-2L)/(W-L) (e.g. 0.85 at 87 km/h in a 3 s window), so 0.75 "
-                        "halves the speed systematically. When the search band (+-120 px) is geometrically "
-                        "too narrow to contain a second lane line, raise this to ~0.95 to disable the guard.")
+                        help="DEPRECATED / no-op, kept so existing run commands still parse. The old "
+                        "octave-guard + sub-octave chain it tuned was replaced by one-shot harmonic-comb "
+                        "fundamental selection (a five-demo audit found the two corrections cancelled on "
+                        "98-100%% of frames); this value is now ignored.")
     parser.add_argument("--max-sens-m-per-px", type=float, default=0.8,
                         help="far-range display threshold. Looser than the CCTV pipeline's 0.30: at 30 fps there "
                         "are ~30x more observations to average, so a given per-pixel sensitivity costs far less "
@@ -186,9 +184,99 @@ def extract_odometer_signals(frames: list[Path], points: list[tuple[int, int]]) 
     return {pt: np.asarray(v, dtype=np.float64) for pt, v in sig.items()}
 
 
+def _peak_snap(ac: np.ndarray, p: float, lo: int, hi: int) -> int | None:
+    """Snap a candidate lag to the nearest genuine autocorrelation peak within
+    +-2 frames. Returns None if it is out of range or not a local maximum (so a
+    candidate that lands in an anticorrelation valley -- e.g. half the clean
+    cruise lag -- is rejected rather than forced onto a shoulder)."""
+    p = int(round(p))
+    if p < lo or p > hi:
+        return None
+    best = p
+    for q in range(max(lo, p - 2), min(hi, p + 2) + 1):
+        if ac[q] > ac[best]:
+            best = q
+    if best <= 0 or best >= len(ac) - 1:
+        return None
+    if not (ac[best] >= ac[best - 1] and ac[best] >= ac[best + 1]):
+        return None
+    return best
+
+
+def _comb_score(ac: np.ndarray, period: int, hi_s: int) -> float:
+    """Harmonic comb minus anti-comb for a candidate fundamental period.
+
+    A true fundamental peaks at every integer multiple (comb high) and sits in
+    an anticorrelation valley at every half-integer multiple (anti low), so
+    comb-anti is large. A harmonic (period = T/2) has its half-multiples land
+    on the real T, 2T peaks -> anti high -> score low. A subharmonic
+    (period = 2T) has its half-multiples land on the real T, 3T peaks -> anti
+    high -> score low. One pass therefore separates the fundamental from both
+    the octave-up and octave-down aliases without the doubling/halving chain.
+    """
+    ints, halfs = [], []
+    k = 1
+    while k * period <= hi_s:
+        ints.append(ac[int(round(k * period))])
+        h = int(round((k - 0.5) * period))
+        if h >= 1:
+            halfs.append(ac[h])
+        k += 1
+    if not ints:
+        return -1e9
+    comb = float(np.mean(ints))
+    anti = float(np.mean(halfs)) if halfs else 0.0
+    return comb - anti
+
+
+def _dual_line(strength: np.ndarray, xoff: np.ndarray) -> float | None:
+    """Detect two interleaved lane lines inside one search band.
+
+    Two parallel lines (ego + adjacent lane) streaming past produce a brightness
+    pulse train at HALF the per-line period, so the strength autocorrelation can
+    latch onto that half period and double the speed (a true 54 km/h reads 108).
+    Brightness alone cannot tell that from a single line at half the cycle -- but
+    the pulses then alternate between two lateral positions. Detect that: pulse
+    peaks must split into two x-clusters (separated well beyond their own
+    scatter) that swap side on nearly every consecutive pulse. Strict on purpose
+    -- a single wandering line must never trip this, or its speed would halve.
+
+    Returns the median inter-pulse spacing (frames) when two lines are present,
+    else None. The caller doubles THAT spacing to recover the per-line cycle,
+    not the argmax lag: at high speed the argmax already sits on the per-line
+    period (the half period is below resolution), so doubling the argmax would
+    over-correct, whereas 2 x pulse-spacing is right in both regimes.
+    """
+    smax = float(np.nanmax(strength)) if strength.size else 0.0
+    thr = max(10.0, 0.4 * smax)
+    idx = [k for k in range(1, len(strength) - 1)
+           if strength[k] >= thr and strength[k] >= strength[k - 1] and strength[k] > strength[k + 1]]
+    if len(idx) < 4:
+        return None
+    idx = np.asarray(idx)
+    xs = xoff[idx]
+    ok = np.isfinite(xs)
+    idx, xs = idx[ok], xs[ok]
+    if len(xs) < 4:
+        return None
+    med = float(np.median(xs))
+    side = (xs > med).astype(int)
+    lo_grp, hi_grp = xs[side == 0], xs[side == 1]
+    if len(lo_grp) < 2 or len(hi_grp) < 2:
+        return None
+    sep = float(hi_grp.mean() - lo_grp.mean())
+    within = float(np.sqrt((lo_grp.var() + hi_grp.var()) / 2.0)) + 1e-6
+    if sep < 6.0 or sep < 2.5 * within:
+        return None
+    switches = float(np.mean(side[1:] != side[:-1]))
+    if switches <= 0.75:
+        return None
+    return float(np.median(np.diff(idx)))
+
+
 def dash_cycle_speeds(frames: list[Path], points: list[tuple[int, int]], cycle_m: float,
                       fps: float, window_s: float, sig: dict | None = None,
-                      octave_threshold: float = 0.75,
+                      octave_threshold: float = 0.75,  # retained for CLI/API compat; no longer used
                       lag_events: list | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Ego speed from the legal dash cycle streaming past fixed image spots.
 
@@ -201,10 +289,14 @@ def dash_cycle_speeds(frames: list[Path], points: list[tuple[int, int]], cycle_m
     where no clear peak.
 
     `lag_events`, when given, collects one dict per surviving per-point
-    candidate recording the lag BEFORE and AFTER each correction (argmax ->
-    octave guard -> sub-octave). Observation only -- it never changes a
-    value -- but it is the audit trail for how often the two corrections
-    fire (and cancel each other) on real footage.
+    candidate recording lag_argmax, the selected lag, and whether the
+    dual-line override fired. Observation only -- it never changes a value --
+    but it is the audit trail for how the one-shot fundamental selection
+    behaves on real footage.
+
+    `octave_threshold` is retained only so existing CLI/API callers keep
+    working; the doubling-then-halving chain it tuned has been replaced by
+    harmonic-comb selection and the value is ignored.
     """
     if sig is None:
         sig = extract_odometer_signals(frames, points)
@@ -262,32 +354,38 @@ def dash_cycle_speeds(frames: list[Path], points: list[tuple[int, int]], cycle_m
                 continue
             lag = lo + int(np.argmax(ac[lo:hi]))
             lag_argmax = lag
-            # Octave guard: neighboring-lane dashes or sub-structure in the
-            # pattern can raise a HARMONIC above the true period, doubling the
-            # speed. If the double lag correlates almost as well, it is the
-            # fundamental -- take it.
-            for _ in range(2):
-                dbl = 2 * lag
-                if dbl <= hi and ac[dbl] >= octave_threshold * ac[lag]:
-                    lag = dbl
-                else:
-                    break
-            lag_octave = lag
-            # Sub-octave correction: freeway lane dashes carry a retro-
-            # reflective road stud on every OTHER dash (20 m spacing), and on
-            # the near rows the stud outshines the paint, so the argmax lands
-            # on TWICE the statutory cycle (half the true speed). The paint's
-            # own peak still shows at half that lag; when it is a genuine
-            # local peak of comparable height, it IS the statutory cycle. A
-            # clean cruise lock is immune: half its lag falls inside the
-            # anticorrelated valley, never on a peak.
-            for h in (lag // 2, (lag + 1) // 2):
-                if h >= max(lag_min, first_min) and h < len(ac) - 1 \
-                        and ac[h] > ac[h - 1] and ac[h] > ac[h + 1] \
-                        and ac[h] >= 0.6 * ac[lag]:
-                    lag = h
-                    break
-            lag_suboct = lag
+            # One-shot fundamental selection over {argmax/2, argmax, 2*argmax}.
+            # The old code doubled the lag (octave guard) then halved it back
+            # (sub-octave stud fix); a five-demo audit found the two cancel on
+            # 98-100% of frames, so the doubling was dead and the neighbor-lane
+            # double-speed it was meant to stop leaked through anyway. Instead
+            # score each candidate period with a harmonic comb (peaks at integer
+            # multiples, valleys at half-multiples) and take the best -- this
+            # picks the statutory cycle whether the argmax landed on a harmonic
+            # (adjacent-lane sub-structure) or a subharmonic (cat's-eye studs at
+            # 20 m). Autocorrelation of brightness alone still cannot tell one
+            # line at half the cycle from two interleaved lines at the full
+            # cycle, so when the pulses resolve into two alternating lateral
+            # positions the true period is 2x the measured pulse spacing (not
+            # 2*argmax -- at speed the argmax already sits on the per-line
+            # period); that dual-line override runs first.
+            hi_s = min(len(ac) - 2, 4 * lag, 2 * hi)  # comb sampling reach
+            lo_c = max(lag_min, first_min)
+            pulse_gap = _dual_line(arr[:, 0], arr[:, 1])
+            if pulse_gap is not None and (snap := _peak_snap(ac, 2 * pulse_gap, lo_c, hi)) is not None:
+                lag = snap
+            else:
+                scores = {}
+                for cand_p in (lag / 2.0, float(lag), 2.0 * lag):
+                    snap = _peak_snap(ac, cand_p, lo_c, hi)
+                    if snap is None:
+                        continue
+                    sc = _comb_score(ac, snap, hi_s)
+                    if sc > scores.get(snap, -1e18):
+                        scores[snap] = sc
+                if not scores:
+                    continue
+                lag = max(scores, key=scores.get)
             # Peak-prominence gate: a genuine dash lock rises from a real
             # valley (measured prominence 0.7-1.1); the broad shoulder of a
             # non-periodic bursty signal barely rises above it (0.00-0.03).
@@ -295,8 +393,8 @@ def dash_cycle_speeds(frames: list[Path], points: list[tuple[int, int]], cycle_m
             if lag_events is not None:
                 lag_events.append({
                     "frame": i, "point_y": pt[1],
-                    "lag_argmax": int(lag_argmax), "lag_octave": int(lag_octave),
-                    "lag_suboct": int(lag_suboct),
+                    "lag_argmax": int(lag_argmax), "lag_selected": int(lag),
+                    "dual_line": bool(pulse_gap is not None),
                     "ac_final": float(ac[lag]), "prominent": prominent,
                 })
             if not prominent:

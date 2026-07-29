@@ -58,28 +58,26 @@ def rolling_median(x: np.ndarray, fps: float) -> np.ndarray:
 
 
 def summarize_events(events: list[dict]) -> dict:
+    """Tally the one-shot fundamental selection (post-refactor 2026-07-24):
+    how often the comb/dual-line pick differs from the raw argmax, split by
+    direction (longer period = lower speed, shorter = higher) and by whether
+    the two-line x-test drove it."""
     n = len(events)
     stats = {
         "candidates": n,
-        "octave_fired": 0,            # guard doubled the argmax lag
-        "suboct_fired": 0,            # sub-octave halved the post-guard lag
-        "cancel_chain": 0,            # doubled THEN reverted to argmax = the two cancel
-        "octave_survived": 0,         # doubled and the doubling stuck
-        "suboct_on_argmax": 0,        # halved without any doubling (stud-fix path)
+        "changed": 0,          # selected lag != argmax lag
+        "period_up": 0,        # selected a LONGER period (lower speed): dual-line or octave-down comb
+        "period_down": 0,      # selected a SHORTER period (higher speed): cat's-eye stud recovery
+        "dual_line": 0,        # two-line x-test fired
         "prominent": 0,
     }
     for e in events:
-        oct_f = e["lag_octave"] != e["lag_argmax"]
-        sub_f = e["lag_suboct"] != e["lag_octave"]
-        stats["octave_fired"] += oct_f
-        stats["suboct_fired"] += sub_f
+        sel, arg = e["lag_selected"], e["lag_argmax"]
+        stats["changed"] += sel != arg
+        stats["period_up"] += sel > arg
+        stats["period_down"] += sel < arg
+        stats["dual_line"] += bool(e.get("dual_line"))
         stats["prominent"] += e["prominent"]
-        if oct_f and e["lag_suboct"] == e["lag_argmax"]:
-            stats["cancel_chain"] += 1
-        elif oct_f and not sub_f:
-            stats["octave_survived"] += 1
-        if not oct_f and sub_f:
-            stats["suboct_on_argmax"] += 1
     return stats
 
 
@@ -116,9 +114,9 @@ def main() -> None:
         report["thresholds"][str(thr)] = st
         c = st["candidates"]
         print(f"  thr={thr:.2f}  candidates={c}  "
-              f"octave_fired={st['octave_fired']} ({st['octave_fired']/max(1,c)*100:.1f}%)  "
-              f"cancel_chain={st['cancel_chain']}  octave_survived={st['octave_survived']}  "
-              f"suboct_on_argmax={st['suboct_on_argmax']}")
+              f"changed={st['changed']} ({st['changed']/max(1,c)*100:.1f}%)  "
+              f"period_up={st['period_up']}  period_down={st['period_down']}  "
+              f"dual_line={st['dual_line']}")
         print(f"           coverage={st['coverage_pct']}%  median={st['median_kmh']} km/h  "
               f"strong-lock-only={st['strong_only_pct']}%")
 
