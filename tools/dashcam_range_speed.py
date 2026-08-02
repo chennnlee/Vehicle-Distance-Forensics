@@ -525,6 +525,22 @@ def stitch_fragments(tracks: dict[int, dict], max_gap_s: float = 2.0,
             ratio = ib["bh0"] / max(1e-6, ia["bh1"])
             if not (0.4 <= ratio <= 2.5):
                 continue
+            # Lateral-budget gate. The plane error gate below compares B's start
+            # against A's CONSTANT-VELOCITY prediction, so a fragment whose
+            # endpoint velocity is garbage can predict its way onto a different
+            # vehicle and still score a small error: wow001's frame-edge car had
+            # lat readings oscillating 8.75/8.36/8.35/8.46/7.70 m, which fitted
+            # to 3.6 m/s of "lateral velocity", and 1.4 s of that landed the
+            # prediction on the bus 4.8 m away -- error 1.50 m, gate 6.00 m,
+            # accepted. Displacement, unlike prediction error, cannot be talked
+            # up by a bad velocity fit: road vehicles change lanes at ~0.7-1.2
+            # m/s (3.5 m over 3-5 s), so even ego and target swapping lanes in
+            # opposite directions stays near 2.4 m/s and cannot hold it across
+            # the gap. The 1.5 m floor is ground-point noise -- genuine rejoins
+            # across 2-frame dropouts already differ by up to 1.4 m laterally,
+            # so a tighter constant would sever correct joins.
+            if abs(disp_lat := float(ib["p0"][0] - ia["p1"][0])) > 1.5 * gap + 1.5:
+                continue
             va = ia["v1"]
             sa = float(np.linalg.norm(va))
             pred = ia["p1"] + va * gap
@@ -557,6 +573,8 @@ def stitch_fragments(tracks: dict[int, dict], max_gap_s: float = 2.0,
                     "bw_tail": float(ia["bw1"]), "bw_head": float(ib["bw0"]),
                     "err_px_rel": err_px / scale_px, "disp_px_rel": disp_px / scale_px,
                     "u1": float(np.linalg.norm(ia["u1"])),
+                    "disp_lat": abs(disp_lat), "disp_fwd": float(abs(disp[1])),
+                    "sa": sa, "va_lat": float(abs(va[0])),
                 })
             candidates.append((err + 0.5 * gap, a, b))
 
