@@ -893,7 +893,12 @@ def main() -> None:
     video_path = Path(args.render_video)
     if not video_path.is_absolute():
         video_path = out_dir / video_path
+    video_path.parent.mkdir(parents=True, exist_ok=True)
     writer = cv2.VideoWriter(str(video_path), cv2.VideoWriter_fourcc(*"mp4v"), args.fps, (img_w, img_h))
+    # VideoWriter reports failure only through isOpened(); without this check a
+    # bad path renders nothing and the run still prints "saved".
+    if not writer.isOpened():
+        raise RuntimeError(f"Could not open video writer at {video_path}")
     frame_obs: dict[int, list[tuple[int, dict, str]]] = {}
     for tid, rec in tracks.items():
         if len(rec["obs"]) < int(args.fps) or rec.get("duplicate_of"):
