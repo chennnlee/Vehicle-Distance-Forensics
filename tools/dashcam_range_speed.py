@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -456,8 +457,24 @@ def _endpoint_velocity_2d(obs: list[dict], tail: bool, window_s: float = 1.0) ->
     return np.array([np.linalg.lstsq(A, P[m][:, ax], rcond=None)[0][0] for ax in range(2)])
 
 
+def _endpoint_velocity_px(obs: list[dict], tail: bool, window_s: float = 1.0) -> np.ndarray:
+    """Same endpoint fit as `_endpoint_velocity_2d`, but on IMAGE coordinates.
+
+    The relative plane goes unreliable exactly when it matters (ego braking
+    pitches the camera, so fwd_m jumps metres while the target has barely
+    moved on screen); image position keeps working there, so the stitcher
+    needs a velocity estimate in both spaces."""
+    t = np.array([o["t"] for o in obs])
+    P = np.array([[o["px"], o["py"]] for o in obs])
+    m = (t >= t[-1] - window_s) if tail else (t <= t[0] + window_s)
+    if m.sum() < 3 or float(t[m][-1] - t[m][0]) < 0.2:
+        return np.zeros(2)
+    A = np.column_stack([t[m] - t[m][0], np.ones(int(m.sum()))])
+    return np.array([np.linalg.lstsq(A, P[m][:, ax], rcond=None)[0][0] for ax in range(2)])
+
+
 def stitch_fragments(tracks: dict[int, dict], max_gap_s: float = 2.0,
-                     max_sens: float = 0.8) -> list[tuple[int, int]]:
+                     max_sens: float = 0.8, stitch_log: list | None = None) -> list[tuple[int, int]]:
     """Rejoin track fragments that are the same physical vehicle (CCTV v3
     port, adapted to the ego-relative plane).
 
@@ -484,6 +501,12 @@ def stitch_fragments(tracks: dict[int, dict], max_gap_s: float = 2.0,
             "sens0": obs[0].get("sens", 0.0), "sens1": obs[-1].get("sens", 0.0),
             "v0": _endpoint_velocity_2d(obs, tail=False),
             "v1": _endpoint_velocity_2d(obs, tail=True),
+            "q0": np.array([obs[0]["px"], obs[0]["py"]], dtype=float),
+            "q1": np.array([obs[-1]["px"], obs[-1]["py"]], dtype=float),
+            "bw0": obs[0]["box"][2] - obs[0]["box"][0],
+            "bw1": obs[-1]["box"][2] - obs[-1]["box"][0],
+            "u0": _endpoint_velocity_px(obs, tail=False),
+            "u1": _endpoint_velocity_px(obs, tail=True),
         }
 
     candidates = []
@@ -521,6 +544,20 @@ def stitch_fragments(tracks: dict[int, dict], max_gap_s: float = 2.0,
             if sa > 2.0 and sb > 2.0:
                 if float(np.dot(va, ib["v0"])) / max(1e-9, sa * sb) < 0.3:
                     continue
+            # Image-space audit of the same join (observation only here; the
+            # gate that uses it is applied after the distribution was looked at).
+            q_pred = ia["q1"] + ia["u1"] * gap
+            err_px = float(np.linalg.norm(q_pred - ib["q0"]))
+            disp_px = float(np.linalg.norm(ib["q0"] - ia["q1"]))
+            scale_px = max(ia["bw1"], ib["bw0"], 1.0)
+            if stitch_log is not None:
+                stitch_log.append({
+                    "a": a, "b": b, "gap": gap, "err_m": err, "gate_m": gate,
+                    "bh_ratio": ratio, "err_px": err_px, "disp_px": disp_px,
+                    "bw_tail": float(ia["bw1"]), "bw_head": float(ib["bw0"]),
+                    "err_px_rel": err_px / scale_px, "disp_px_rel": disp_px / scale_px,
+                    "u1": float(np.linalg.norm(ia["u1"])),
+                })
             candidates.append((err + 0.5 * gap, a, b))
 
     candidates.sort()
@@ -755,6 +792,23 @@ def main() -> None:
                     continue
                 if det["bh"] / max(1e-6, tr["bh"]) > 1.6 or det["bh"] / max(1e-6, tr["bh"]) < 0.6:
                     continue
+                # Image-space consistency. The relative plane fails exactly
+                # where it is needed most: ego braking pitches the camera, so
+                # fwd_m swings metres while the vehicle has barely moved on
+                # screen, and the plane gate then happily hands the track to
+                # the car alongside (dc007 7.5-11 s: id152/157 swapped back and
+                # forth between the blue and red cars). Image position survives
+                # pitch, and a real vehicle cannot jump across the frame: over
+                # the demos, consecutive-frame centre motion stays under ~0.18
+                # box widths (p99 0.11-0.18), while the swap steps sat at 0.90.
+                # The box-width term is what lets NEAR vehicles move fast in
+                # pixels (apparent speed scales with apparent size) without
+                # loosening the gate for distant ones.
+                dc = float(np.hypot((det["box"][0] + det["box"][2]) * 0.5 - tr["cx"],
+                                    (det["box"][1] + det["box"][3]) * 0.5 - tr["cy"]))
+                bw = max(det["box"][2] - det["box"][0], tr["bw"], 1.0)
+                if dc > 0.35 * bw + 250.0 * step_dt:
+                    continue
                 d = float(np.linalg.norm(det["pos"] - pred))
                 if d < gate:
                     cost[ti, di] = d
@@ -773,7 +827,10 @@ def main() -> None:
                 if step_dt > 1e-6:
                     inst = (det["pos"] - tr["pos"]) / step_dt
                     tr["vel"] = inst if tr["n_obs"] == 1 else 0.7 * tr["vel"] + 0.3 * inst
-                tr.update(pos=det["pos"], bh=det["bh"], last_t=t_now)
+                tr.update(pos=det["pos"], bh=det["bh"], last_t=t_now,
+                          cx=(det["box"][0] + det["box"][2]) * 0.5,
+                          cy=(det["box"][1] + det["box"][3]) * 0.5,
+                          bw=det["box"][2] - det["box"][0])
                 tr["n_obs"] += 1
                 tracks[tr["id"]]["obs"].append({"frame": i, "t": t_now, "px": det["px"], "py": det["py"],
                                                 "box": det["box"], "lat_m": float(det["pos"][0]),
@@ -785,14 +842,22 @@ def main() -> None:
             tid = next_id
             next_id += 1
             active.append({"id": tid, "cls": det["cls"], "pos": det["pos"], "vel": np.zeros(2),
-                           "bh": det["bh"], "last_t": t_now, "n_obs": 1})
+                           "bh": det["bh"], "last_t": t_now, "n_obs": 1,
+                           "cx": (det["box"][0] + det["box"][2]) * 0.5,
+                           "cy": (det["box"][1] + det["box"][3]) * 0.5,
+                           "bw": det["box"][2] - det["box"][0]})
             tracks[tid] = {"cls": det["cls"], "obs": [{"frame": i, "t": t_now, "px": det["px"], "py": det["py"],
                                                        "box": det["box"], "lat_m": float(det["pos"][0]),
                                                        "fwd_m": float(det["pos"][1]), "sens": det["sens"],
                                                        "cls": det["cls"], "bh": det["bh"]}]}
         active = [tr for tr in active if t_now - tr["last_t"] <= 0.8]
 
-    merges = stitch_fragments(tracks, max_sens=args.max_sens_m_per_px)
+    stitch_log: list[dict] = []
+    merges = stitch_fragments(tracks, max_sens=args.max_sens_m_per_px, stitch_log=stitch_log)
+    if os.environ.get("DASHCAM_STITCH_LOG"):
+        Path(os.environ["DASHCAM_STITCH_LOG"]).write_text(
+            json.dumps({"accepted": [list(m) for m in merges], "candidates": stitch_log},
+                       indent=1), encoding="utf-8")
     if merges:
         print("stitched fragments (same vehicle, detection dropout): "
               + ", ".join(f"id{b}->id{a}" for a, b in merges))
