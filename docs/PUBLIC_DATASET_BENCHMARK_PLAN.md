@@ -57,10 +57,37 @@ Estimation*, J. Real-Time Image Processing 2025）都在它上面報數字,所�
 
 → **nuScenes 不當速度 benchmark,但仍可用於第 4 點（微調偵測器）**,因為它的 3D 標註可投影成 2D bbox。
 
-### C. 只有 bbox、沒有速度真值（純為第 4 點微調用）
+### C. 為第 4 點（微調偵測器）準備的資料集
 
-- **UA-DETRAC** —— 交通監視器視角,大量車輛 bbox（與管線 A 視角最接近）
-- **BDD100K** —— 10 萬張行車紀錄器影像含 bbox,部分帶 GPS 速度（與管線 B 視角最接近）
+⚠ **這裡有一個容易被忽略的陷阱:我們用的是分割模型,不是偵測模型。**
+
+本專案的接地點取「**遮罩最低 12%**」而不是「框底邊」——因為框底邊會被陰影與保險桿下緣拉走,
+而接地點位置**直接決定距離與速度**。所以:
+
+- 只有 **bbox** 的資料集（KITTI、nuScenes、UA-DETRAC、BDD100K 主集）**沒辦法微調遮罩頭**,
+  只能微調偵測頭,遮罩仍是 COCO 訓練出來的 → 對我們的量測精度幫助有限。
+- 而且 nuScenes 的 2D 框是 3D 立方體投影後的**軸對齊外接框**,天生比 COCO 的緊貼框鬆
+  （實測投影圖可見卡車框略大於車體）。用鬆框微調會把框撐大 → 接地點下移 → 距離改變。
+
+| 資料集 | 有 instance mask？ | 內容 |
+|---|---|---|
+| **nuImages** | ✅ **有** | 93,000 張、**80 萬個物件**,同時有 instance mask + 2D box + 語意分割;nuScenes 團隊出品,同一套類別,取自約 500 個 log（比 nuScenes 的 83 個更多樣） |
+| Cityscapes | ✅ 有 | 街景 instance segmentation,但車輛樣本數較少 |
+| BDD100K | 部分 | 10 萬張有 bbox,另有 1 萬張的 instance segmentation 子集 |
+| KITTI / nuScenes / UA-DETRAC | ✗ 只有框 | 可微調偵測頭,不能微調遮罩頭 |
+
+→ **第 4 點若要做,正解是 nuImages**,不是 nuScenes。
+
+#### 已完成的準備工作
+
+`tools/nuscenes_to_yolo_bbox.py`（本機 nuScenes v1.0-mini 實跑通過）:
+把 3D 立方體經 global → ego → camera 轉換後投影成 2D 框,輸出 **YOLO 格式標註**,
+class id 直接用 **COCO 編號**（car 2 / motorcycle 3 / bus 5 / truck 7）,
+這樣微調出來的模型可以直接丟回現有管線,不必改任何過濾邏輯。
+
+實跑結果（CAM_FRONT、visibility ≥ 2）:404 張影像、**1,724 個車輛框**
+（car 1273、truck 213、bus 145、motorcycle 93）。已輸出驗證圖目視確認投影正確。
+同一套轉換邏輯可以直接套用到 nuImages（同團隊、同座標慣例）。
 
 ---
 
