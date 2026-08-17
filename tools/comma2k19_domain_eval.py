@@ -32,13 +32,18 @@ they cost:
    admitting the marker period only below 105 km/h) was a confound: the dark
    segments and the arterial approach are also the slow ones.
 
-3. The pulses in the failing stretches do NOT alternate. Interleaved paint and
-   markers would produce a train alternating in width, amplitude, and area
-   between neighbours; measured alternation contrast is no higher in half-locked
-   windows than in correctly locked ones, and adjacent-pair agreement sits at
-   0.53-0.72 against 0.50 for a coin. So the geometry was never paint-plus-marker
-   at half the cycle -- it is one uniform train whose period is not the one the
-   evaluation assumed.
+3. On the arterial there is no interleave at all -- one uniform train whose period
+   is simply not the one the evaluation assumed. On the night freeway there IS
+   one: the same stretch of I-280 gives 271 full-period windows against 25
+   half-period ones by day and 37 against 249 by night, so after dark an extra
+   pulse really does appear between the dashes. What fails there is telling the
+   two pulse types APART. Alternation in width, peakedness, area and amplitude is
+   no stronger in half-locked windows than in correct ones (adjacent-pair
+   agreement 0.53-0.72 against 0.50 for a coin), and vertical extent -- the one
+   axis the row-averaging discards -- separates the groups by a single image row
+   (6.0 vs 7.0), because a long night exposure smears a point marker into a
+   streak. No within-window rule can choose; `_join_octaves` in
+   dashcam_range_speed.py chooses along time instead.
 
 Everything here recomputes from `per_frame/*.npz` plus the segment positions in
 the chunk zip, so it never re-decodes video or re-measures: the numbers are the
@@ -106,7 +111,7 @@ def road_luminance(frames_dir: Path, points: np.ndarray, stride: int = 40) -> fl
 
 
 def draw(path: Path, lat_bins: list[dict], per_clip: list[dict], errs: dict,
-         cycle: float, lum_threshold: float) -> None:
+         cycle: float, lum_threshold: float, title: str) -> None:
     """Four panels, in the order the argument actually runs.
 
     Left column shares a latitude axis so the step in the marking period and the
@@ -205,8 +210,7 @@ def draw(path: Path, lat_bins: list[dict], per_clip: list[dict], errs: dict,
     axD.set_ylabel("share of locked frames below (%)", color=INK2, fontsize=9)
     axD.set_title("Stating the domain moves the whole tail", color=INK, fontsize=11, loc="left")
 
-    fig.suptitle("comma2k19 pipeline-B: the doubled locks are road class and darkness, not markers "
-                 "between dashes", color=INK, fontsize=12.5)
+    fig.suptitle(title, color=INK, fontsize=12.5)
     fig.tight_layout(rect=(0, 0, 1, 0.965))
     fig.savefig(path, dpi=150, facecolor=SURF)
     print(f"圖 -> {path}")
@@ -235,6 +239,10 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--eval-dir", default=str(PROJECT_ROOT / "data/output/comma2k19_eval"))
+    ap.add_argument("--per-frame-dir", default="",
+                    help="Per-frame .npz dumps to score, if not the eval dir's own per_frame/. "
+                         "Lets a re-run be compared against the published pass without "
+                         "overwriting it.")
     ap.add_argument("--zip", default=str(PROJECT_ROOT / "data/input/comma2k19/Chunk_1.zip"))
     ap.add_argument("--frames-root", default="/tmp/comma_seg",
                     help="Segment dirs, only needed for the road-luminance column.")
@@ -251,6 +259,9 @@ def main() -> None:
     ap.add_argument("--no-luminance", action="store_true", help="Skip reading frames.")
     ap.add_argument("--out-json", default="")
     ap.add_argument("--out-png", default="")
+    ap.add_argument("--fig-title",
+                    default="comma2k19 pipeline-B: road class sets the wrong constant, darkness "
+                            "picks the wrong octave")
     args = ap.parse_args()
 
     eval_dir = Path(args.eval_dir)
@@ -260,7 +271,8 @@ def main() -> None:
     zf = zipfile.ZipFile(args.zip)
 
     clips = []
-    for f in sorted((eval_dir / "per_frame").glob("*.npz")):
+    pf_dir = Path(args.per_frame_dir) if args.per_frame_dir else eval_dir / "per_frame"
+    for f in sorted(pf_dir.glob("*.npz")):
         tag = f.stem
         route, s = seg[tag]
         with zf.open(f"Chunk_1/{route}/{s}/global_pose/frame_positions") as fh:
@@ -370,7 +382,7 @@ def main() -> None:
     out["corridor_latitude_bins"] = bins
 
     if args.out_png:
-        draw(Path(args.out_png), bins, per_clip, errs, cycle, args.lum_threshold)
+        draw(Path(args.out_png), bins, per_clip, errs, cycle, args.lum_threshold, args.fig_title)
 
     if args.out_json:
         Path(args.out_json).write_text(json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8")

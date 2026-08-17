@@ -76,6 +76,16 @@ def parse_args() -> argparse.Namespace:
                         "octave-guard + sub-octave chain it tuned was replaced by one-shot harmonic-comb "
                         "fundamental selection (a five-demo audit found the two corrections cancelled on "
                         "98-100%% of frames); this value is now ignored.")
+    parser.add_argument("--no-join-octaves", dest="join_octaves", action="store_false",
+                        help="Choose each frame's fundamental independently, as before 2026-08-17. "
+                        "The default joins the choice along time, which is what stops a lock halving "
+                        "for a second and coming back where a retroreflective marker puts a real peak "
+                        "at half the paint period (measured on comma2k19's night freeway: MAE 13.9 -> "
+                        "4.5, p90 88.3 -> 3.4). Turn it off to reproduce an archived run.")
+    parser.add_argument("--max-rel-change-per-s", type=float, default=1.5,
+                        help="Speed change per second the joint octave choice treats as free, as a "
+                        "fraction of speed. 1.5 is far above any real vehicle and far below the 0.69 "
+                        "log-jump an octave costs, which is the only thing it needs to separate.")
     parser.add_argument("--max-sens-m-per-px", type=float, default=0.8,
                         help="far-range display threshold. Looser than the CCTV pipeline's 0.30: at 30 fps there "
                         "are ~30x more observations to average, so a given per-pixel sensitivity costs far less "
@@ -287,11 +297,105 @@ def _dual_line(strength: np.ndarray, xoff: np.ndarray) -> float | None:
     return float(np.median(np.diff(idx)))
 
 
+def _join_octaves(cands: list[dict | None], fps: float, cycle_m: float,
+                  max_rel_change_per_s: float = 1.5, break_penalty: float = 20.0) -> list[int | None]:
+    """Choose each frame's fundamental jointly along time, not frame by frame.
+
+    Inside a single window the fundamental can be genuinely undecidable: measured
+    on comma2k19's night freeway, a retroreflective marker midway between the
+    dashes puts a real autocorrelation peak at half the paint period, and five
+    shape features (pulse width, peakedness, area, amplitude, vertical extent)
+    all fail to tell the two pulse types apart -- the last differs by one image
+    row, which a long night exposure smears away. So no per-window rule can fix
+    it, and the previous code chose per frame per point with nothing tying one
+    frame's choice to its neighbours'; a lock could halve for a second and come
+    back.
+
+    Across time it is decidable, because a vehicle cannot double its speed
+    between two frames. This is a Viterbi over each frame's own candidate lags:
+    the emission term keeps the harmonic-comb preference that already works, and
+    the transition term charges for implied acceleration. Nothing is invented --
+    every candidate is a peak this frame's autocorrelation actually has, so a
+    genuine change of speed is still free to be followed; what becomes expensive
+    is jumping an octave and back.
+
+    The transition term must be SCALE-FREE, and getting that wrong is worse than
+    not doing it at all. A first attempt charged absolute |dv|, which regressed
+    the Taiwanese archive badly (dc003 coverage 57.8% -> 27.1%, wow001 median
+    89.4 -> 77.9 km/h, 229 frames moved on hs006s): a path running an octave low
+    also runs its speed CHANGES an octave low, so it always looks smoother, and
+    the penalty quietly rewarded halving. Charging |d log v| costs the true and
+    the halved trajectory exactly the same, which leaves the octave to be decided
+    by the evidence -- the comb score summed along the run -- and leaves the
+    transition term doing only what it should: making a jump between octaves
+    (|log 2| = 0.69) expensive while any real acceleration stays free.
+
+    `break_penalty` is the cost of an impossible transition rather than a ban:
+    footage really does contain discontinuities (a lane change, a dropout), and a
+    hard constraint would propagate one bad neighbourhood through a whole clip.
+    """
+    n = len(cands)
+    # Per-frame allowance, from a per-second one, so a 10 fps clip is not held to
+    # a 30 fps clip's step. 1.5/s is far above any real vehicle (150% of speed per
+    # second) and far below an octave, which is the only thing this must catch.
+    rel_tol = max_rel_change_per_s / fps
+    dp: list[dict[int, float]] = [{} for _ in range(n)]
+    back: list[dict[int, int]] = [{} for _ in range(n)]
+
+    for i, rec in enumerate(cands):
+        if not rec or not rec["scores"]:
+            continue
+        # Emission: comb score relative to this frame's best, so a frame whose
+        # autocorrelation is uniformly strong or weak weighs the same as any
+        # other -- only the preference between ITS candidates should matter.
+        best = max(rec["scores"].values())
+        prev = dp[i - 1] if i > 0 else {}
+        for lag, sc in rec["scores"].items():
+            emit = float(sc - best)
+            if not prev:
+                dp[i][lag] = emit
+                back[i][lag] = -1
+                continue
+            bestval, bestsrc = -1e18, -1
+            for plag, pval in prev.items():
+                # log-ratio of speeds == log-ratio of lags, inverted; use the lags
+                # directly so cycle_m and fps cannot affect the decision at all.
+                step = abs(np.log(plag / lag))
+                val = pval - break_penalty * max(0.0, step - rel_tol)
+                if val > bestval:
+                    bestval, bestsrc = val, plag
+            dp[i][lag] = bestval + emit
+            back[i][lag] = bestsrc
+
+    # Backtrack each maximal run of frames that have candidates: a gap resets the
+    # chain, so one unreadable stretch cannot drag its neighbours' choices.
+    out: list[int | None] = [None] * n
+    i = n - 1
+    while i >= 0:
+        if not dp[i]:
+            i -= 1
+            continue
+        end = i
+        while i >= 0 and dp[i]:
+            i -= 1
+        start = i + 1
+        lag = max(dp[end], key=lambda lg: dp[end][lg])
+        for k in range(end, start - 1, -1):
+            out[k] = lag
+            nxt = back[k].get(lag, -1)
+            if nxt == -1:
+                break
+            lag = nxt
+    return out
+
+
 def dash_cycle_speeds(frames: list[Path], points: list[tuple[int, int]], cycle_m: float,
                       fps: float, window_s: float, sig: dict | None = None,
                       octave_threshold: float = 0.75,  # retained for CLI/API compat; no longer used
                       lag_events: list | None = None,
-                      band_px: int = 120) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+                      band_px: int = 120,
+                      join_octaves: bool = True,
+                      max_rel_change_per_s: float = 1.5) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Ego speed from the legal dash cycle streaming past fixed image spots.
 
     The lane paint is a legal-length periodic pattern (dash+gap), so the
@@ -321,11 +425,15 @@ def dash_cycle_speeds(frames: list[Path], points: list[tuple[int, int]], cycle_m
     v = np.full(n, np.nan)
     conf = np.zeros(n)
     prom = np.zeros(n)
+    # Pass 1 collects each frame's candidate fundamentals per point; pass 2 picks
+    # among them jointly along time; pass 3 applies the gates and the cross-point
+    # consensus. The split exists only so the octave choice can see its
+    # neighbours -- every per-window computation below is unchanged.
+    collected: dict[tuple[int, int], list[dict | None]] = {pt: [None] * n for pt in points}
     for i in range(n):
         j0, j1 = max(0, i - half), min(n, i + half)
         if j1 - j0 < lag_max + 10:
             j0, j1 = max(0, min(j0, n - lag_max - 10)), min(n, max(j1, lag_max + 10))
-        cand: list[tuple[float, float, int, np.ndarray, float]] = []
         for pt in points:
             arr = np.asarray(sig[pt])[j0:j1]
             s = arr[:, 0].copy()
@@ -390,7 +498,10 @@ def dash_cycle_speeds(frames: list[Path], points: list[tuple[int, int]], cycle_m
             lo_c = max(lag_min, first_min)
             pulse_gap = _dual_line(arr[:, 0], arr[:, 1])
             if pulse_gap is not None and (snap := _peak_snap(ac, 2 * pulse_gap, lo_c, hi)) is not None:
-                lag = snap
+                # The dual-line reading is a direct observation of the geometry,
+                # not a preference among peaks, so it stands alone as the frame's
+                # only candidate and the joint pass has nothing to overrule.
+                scores = {snap: 0.0}
             else:
                 scores = {}
                 for cand_p in (lag / 2.0, float(lag), 2.0 * lag):
@@ -402,7 +513,25 @@ def dash_cycle_speeds(frames: list[Path], points: list[tuple[int, int]], cycle_m
                         scores[snap] = sc
                 if not scores:
                     continue
-                lag = max(scores, key=scores.get)
+            collected[pt][i] = {"scores": scores, "ac": ac, "first_min": first_min,
+                                "s": s, "lag_argmax": lag_argmax,
+                                "dual_line": pulse_gap is not None}
+
+    # Pass 2: the octave choice, jointly along time.
+    chosen = {pt: (_join_octaves(collected[pt], fps, cycle_m, max_rel_change_per_s)
+                   if join_octaves else
+                   [(max(r["scores"], key=r["scores"].get) if r else None) for r in collected[pt]])
+              for pt in points}
+
+    # Pass 3: gates and cross-point consensus, per frame.
+    for i in range(n):
+        cand: list[tuple[float, float, int, np.ndarray, float]] = []
+        for pt in points:
+            rec = collected[pt][i]
+            lag = chosen[pt][i]
+            if rec is None or lag is None:
+                continue
+            ac, first_min, s = rec["ac"], rec["first_min"], rec["s"]
             # Peak-prominence gate: a genuine dash lock rises from a real
             # valley (measured prominence 0.7-1.1); the broad shoulder of a
             # non-periodic bursty signal barely rises above it (0.00-0.03).
@@ -410,8 +539,8 @@ def dash_cycle_speeds(frames: list[Path], points: list[tuple[int, int]], cycle_m
             if lag_events is not None:
                 lag_events.append({
                     "frame": i, "point_y": pt[1],
-                    "lag_argmax": int(lag_argmax), "lag_selected": int(lag),
-                    "dual_line": bool(pulse_gap is not None),
+                    "lag_argmax": int(rec["lag_argmax"]), "lag_selected": int(lag),
+                    "dual_line": bool(rec["dual_line"]),
                     "ac_final": float(ac[lag]), "prominent": prominent,
                 })
             if not prominent:
@@ -760,10 +889,13 @@ def main() -> None:
         # Dual-window agreement gate: octave errors and acceleration smear are
         # window-length sensitive while true locks are not, so demand two
         # window sizes to agree within 12% before trusting a value.
-        v1, c1, p1 = dash_cycle_speeds(frames, pts, args.dash_cycle_m, args.fps, args.odometer_window_s, sig=sig,
-                                       octave_threshold=args.octave_threshold)
-        v2, c2, _ = dash_cycle_speeds(frames, pts, args.dash_cycle_m, args.fps, args.odometer_window_s * 1.7, sig=sig,
-                                      octave_threshold=args.octave_threshold)
+        odo_kw = {"octave_threshold": args.octave_threshold,
+                  "join_octaves": args.join_octaves,
+                  "max_rel_change_per_s": args.max_rel_change_per_s}
+        v1, c1, p1 = dash_cycle_speeds(frames, pts, args.dash_cycle_m, args.fps, args.odometer_window_s,
+                                       sig=sig, **odo_kw)
+        v2, c2, _ = dash_cycle_speeds(frames, pts, args.dash_cycle_m, args.fps, args.odometer_window_s * 1.7,
+                                      sig=sig, **odo_kw)
         agree = np.isfinite(v1) & np.isfinite(v2) & (np.abs(v1 - v2) <= 0.12 * np.maximum(v1, v2))
         # A STRONG short-window lock (sharp, prominent peak) stands on its
         # own: on short decelerating clips the long window's average drifts
