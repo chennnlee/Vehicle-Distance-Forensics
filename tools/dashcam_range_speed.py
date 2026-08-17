@@ -158,8 +158,20 @@ def road_change_fraction(prev_gray, gray, boxes, hood_y: int) -> float:
     return float(diff[mask].mean())
 
 
-def extract_odometer_signals(frames: list[Path], points: list[tuple[int, int]]) -> dict:
-    """Per-frame (pulse strength, pulse x-offset) at each odometer point."""
+def extract_odometer_signals(frames: list[Path], points: list[tuple[int, int]],
+                             band_px: int = 120) -> dict:
+    """Per-frame (pulse strength, pulse x-offset) at each odometer point.
+
+    `band_px` is the lateral search half-width. 120 px suits the 1920-wide
+    Taiwanese dashcams every existing case uses and is the default so their
+    numbers do not move, but it is not a constant of nature: it should stay
+    inside one lane's image width at the sampling row, and on a 1164-wide
+    wide-FOV camera the far rows put adjacent lane lines only ~175 px apart, so
+    the default window spans more than one lane. (Measured on comma2k19, that
+    straddle turned out NOT to be what made those clips read double -- halving
+    the band moved their MAE by ~1 km/h. The doubling came from raised pavement
+    markers at half the paint cycle, which no band width can exclude.)
+    """
     sig = {pt: [] for pt in points}
     for f in frames:
         g = cv2.cvtColor(cv2.imread(str(f)), cv2.COLOR_BGR2GRAY)
@@ -169,10 +181,10 @@ def extract_odometer_signals(frames: list[Path], points: list[tuple[int, int]]) 
         for (x, y) in points:
             # The car drifts laterally inside (or across) its lane over the
             # clip, so a FIXED pixel slides off the paint. Instead search a
-            # +-120 px band on the row: whenever a dash crosses this row, the
-            # band's peak lights up no matter where the line has wandered.
-            x0 = max(0, x - 120)
-            band = diff[max(0, y - 6): y + 7, x0: x + 121]
+            # band on the row: whenever a dash crosses this row, the band's
+            # peak lights up no matter where the line has wandered.
+            x0 = max(0, x - band_px)
+            band = diff[max(0, y - 6): y + 7, x0: x + band_px + 1]
             if band.size == 0:
                 sig[(x, y)].append((0.0, np.nan))
                 continue
@@ -278,7 +290,8 @@ def _dual_line(strength: np.ndarray, xoff: np.ndarray) -> float | None:
 def dash_cycle_speeds(frames: list[Path], points: list[tuple[int, int]], cycle_m: float,
                       fps: float, window_s: float, sig: dict | None = None,
                       octave_threshold: float = 0.75,  # retained for CLI/API compat; no longer used
-                      lag_events: list | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+                      lag_events: list | None = None,
+                      band_px: int = 120) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Ego speed from the legal dash cycle streaming past fixed image spots.
 
     The lane paint is a legal-length periodic pattern (dash+gap), so the
@@ -300,7 +313,7 @@ def dash_cycle_speeds(frames: list[Path], points: list[tuple[int, int]], cycle_m
     harmonic-comb selection and the value is ignored.
     """
     if sig is None:
-        sig = extract_odometer_signals(frames, points)
+        sig = extract_odometer_signals(frames, points, band_px)
     n = len(frames)
     win = int(round(window_s * fps))
     half = win // 2
@@ -332,7 +345,10 @@ def dash_cycle_speeds(frames: list[Path], points: list[tuple[int, int]], cycle_m
             pulsed = arr[:, 0] > 10.0
             if pulsed.sum() >= 4:
                 q75, q25 = np.percentile(arr[pulsed, 1], [75, 25])
-                if q75 - q25 > 50.0:
+                # Expressed as a share of the search band, so narrowing the band
+                # for a wide-FOV camera does not silently also make this gate
+                # stricter in relative terms.
+                if q75 - q25 > 50.0 * band_px / 120.0:
                     continue
             ac = np.correlate(s, s, "full")[len(s) - 1:]
             if ac[0] <= 0:
