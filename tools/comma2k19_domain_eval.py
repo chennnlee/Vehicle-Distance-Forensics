@@ -239,6 +239,15 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--eval-dir", default=str(PROJECT_ROOT / "data/output/comma2k19_eval"))
+    ap.add_argument("--segments-csv", default="",
+                    help="Segment index to read, if not the eval dir's segments.csv. "
+                         "Needed when scoring a chunk other than the first.")
+    ap.add_argument("--chunk", type=int, default=1,
+                    help="Which chunk the segments live in, for the zip's internal paths.")
+    ap.add_argument("--no-arterial-cut", action="store_true",
+                    help="Skip the Chunk_1 arterial exclusion. Correct for any run whose segments "
+                         "were chosen by comma2k19_select.py, where road class is a selection "
+                         "criterion rather than something removed afterwards.")
     ap.add_argument("--per-frame-dir", default="",
                     help="Per-frame .npz dumps to score, if not the eval dir's own per_frame/. "
                          "Lets a re-run be compared against the published pass without "
@@ -266,8 +275,9 @@ def main() -> None:
 
     eval_dir = Path(args.eval_dir)
     cycle = args.dash_cycle_m
+    seg_csv = Path(args.segments_csv) if args.segments_csv else Path(eval_dir) / "segments.csv"
     seg = {r["tag"]: (r["route"], r["segment"])
-           for r in csv.DictReader(open(Path(eval_dir) / "segments.csv", encoding="utf-8"))}
+           for r in csv.DictReader(open(seg_csv, encoding="utf-8"))}
     zf = zipfile.ZipFile(args.zip)
 
     clips = []
@@ -275,15 +285,16 @@ def main() -> None:
     for f in sorted(pf_dir.glob("*.npz")):
         tag = f.stem
         route, s = seg[tag]
-        with zf.open(f"Chunk_1/{route}/{s}/global_pose/frame_positions") as fh:
+        with zf.open(f"Chunk_{args.chunk}/{route}/{s}/global_pose/frame_positions") as fh:
             lat, lon = ecef_to_geodetic(np.load(io.BytesIO(fh.read())))
         d = np.load(f)
         n = min(len(lat), len(d["inv_t"]))
         rec = {"tag": tag, "lat": lat[:n], "lon": lon[:n], "usable": d["usable"][:n],
                "est": 3.6 * cycle * d["inv_t"][:n], "pose": d["v_alt"][:n],
                "can": d["v_truth"][:n], "points": d["points"]}
-        rec["arterial"] = ((np.abs(rec["lon"] - CORRIDOR_LON) < CORRIDOR_LON_TOL)
-                           & (rec["lat"] > ARTERIAL_LAT_MIN))
+        rec["arterial"] = (np.zeros(n, bool) if args.no_arterial_cut else
+                           ((np.abs(rec["lon"] - CORRIDOR_LON) < CORRIDOR_LON_TOL)
+                            & (rec["lat"] > ARTERIAL_LAT_MIN)))
         rec["lum"] = float("nan")
         if not args.no_luminance:
             fd = Path(args.frames_root) / tag / "frames"
@@ -362,6 +373,8 @@ def main() -> None:
     print("\n=== 半週期率 vs 位置(共用走廊,依緯度分箱)===")
     corr = [(c["lat"], c["est"], c["pose"], c["usable"]) for c in clips
             if (np.abs(c["lon"] - CORRIDOR_LON) < CORRIDOR_LON_TOL).mean() > 0.5]
+    if not corr:
+        print("（本批段落不在 Chunk_1 的共用走廊上,跳過緯度分箱）")
     lat_c = np.concatenate([a[0][a[3]] for a in corr])
     est_c = np.concatenate([a[1][a[3]] for a in corr])
     pose_c = np.concatenate([a[2][a[3]] for a in corr])
