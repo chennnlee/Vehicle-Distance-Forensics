@@ -86,6 +86,12 @@ def parse_args() -> argparse.Namespace:
                         help="Speed change per second the joint octave choice treats as free, as a "
                         "fraction of speed. 1.5 is far above any real vehicle and far below the 0.69 "
                         "log-jump an octave costs, which is the only thing it needs to separate.")
+    parser.add_argument("--distance-correction", type=float, default=1.0,
+                        help="Multiplier on forward distance, from "
+                        "tools/odometer_distance_calib.py. SHARP's fixed-FOV assumption reads "
+                        "range 8-32%% long depending on the camera (hs005 0.760, dc002 0.845, "
+                        "dc008 0.874, dc006 0.923); lateral width is unaffected and must not be "
+                        "scaled. Default 1.0 reproduces the archived runs.")
     parser.add_argument("--max-sens-m-per-px", type=float, default=0.8,
                         help="far-range display threshold. Looser than the CCTV pipeline's 0.30: at 30 fps there "
                         "are ~30x more observations to average, so a given per-pixel sensitivity costs far less "
@@ -93,7 +99,8 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def build_geometry(ply_path: Path, scale: float, image_shape: tuple[int, int], hood_y: int):
+def build_geometry(ply_path: Path, scale: float, image_shape: tuple[int, int], hood_y: int,
+                   distance_correction: float = 1.0):
     points_xyz, _, metadata = load_point_cloud_points(ply_path)
     intr = metadata.get("intrinsics") or {}
     fx = float(intr["fx"])
@@ -123,7 +130,18 @@ def build_geometry(ply_path: Path, scale: float, image_shape: tuple[int, int], h
     e_lat /= np.linalg.norm(e_lat)
 
     def pixel_to_plane(px: float, py: float) -> np.ndarray | None:
-        """Pixel -> (lat_m, fwd_m) on the road plane, camera-relative, scaled."""
+        """Pixel -> (lat_m, fwd_m) on the road plane, camera-relative, scaled.
+
+        `distance_correction` scales the FORWARD component only, and that
+        asymmetry is the whole point. SHARP assumes a fixed field of view
+        (fx = 0.7955 x width), and forward distance goes as the focal length
+        while lateral width at a given row goes as camera height alone -- the
+        focal cancels there. So a wrong FOV stretches range and leaves widths
+        correct, which is exactly what the lane-width anchor cannot see and what
+        tools/odometer_distance_calib.py measures: 0.76 to 0.92 depending on the
+        camera. Scaling both components would break the lane-width calibration
+        that is already right.
+        """
         dx = (px - cx) / fx
         dy = (py - cy) / fy
         denom = dy - a * dx - b
@@ -133,7 +151,7 @@ def build_geometry(ply_path: Path, scale: float, image_shape: tuple[int, int], h
         if t <= 0:
             return None
         p = np.array([dx * t, dy * t, t], dtype=np.float64) * scale
-        return np.array([float(p @ e_lat), float(p @ e_fwd)])
+        return np.array([float(p @ e_lat), float(p @ e_fwd) * distance_correction])
 
     return pixel_to_plane, ground
 
@@ -798,7 +816,8 @@ def main() -> None:
     ply_path = Path(args.reference_pointcloud)
     if not ply_path.is_absolute():
         ply_path = PROJECT_ROOT / ply_path
-    pixel_to_plane, ground = build_geometry(ply_path, args.pointcloud_scale, (img_h, img_w), args.hood_y)
+    pixel_to_plane, ground = build_geometry(ply_path, args.pointcloud_scale, (img_h, img_w),
+                                           args.hood_y, args.distance_correction)
 
     from ultralytics import YOLO
 
