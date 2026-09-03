@@ -87,13 +87,17 @@ def build_plane(ply_path: Path, image_shape: tuple[int, int], hood_y: int):
         return np.array([float(p @ e_lat), float(p @ e_fwd)])
 
     height_raw = abs(c) / float(np.linalg.norm(np.array([a, -1.0, b])))
-    return pixel_to_plane, ground, height_raw
+    # The intrinsics travel with the plane: the horizon row of y = ax + bz + c is
+    # cy + fy*b, and a caller that assumes 1920x1080 gets it wrong on any other
+    # sensor (comma2k19 is 1164x874). Hand them back rather than re-deriving.
+    intrinsics = {"fx": fx, "fy": fy, "cx": cx, "cy": cy}
+    return pixel_to_plane, ground, height_raw, intrinsics
 
 
 def main() -> None:
     args = parse_args()
     w, h = (int(v) for v in args.image_size.lower().split("x"))
-    pixel_to_plane, ground, height_raw = build_plane(Path(args.pointcloud), (h, w), args.hood_y)
+    pixel_to_plane, ground, height_raw, _ = build_plane(Path(args.pointcloud), (h, w), args.hood_y)
 
     rows = []
     for chunk in args.pairs.split(";"):

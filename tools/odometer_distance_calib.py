@@ -24,6 +24,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+from PIL import Image
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -143,11 +144,15 @@ def main() -> None:
         sys.exit("碼表無鎖定,無法校正")
     period = float(np.median(periods))
 
-    p2p, ground, _ = build_plane(Path(args.pointcloud), (1080, 1920), args.hood_y)
+    # 影像尺寸由影格自己讀,內參由點雲帶回 —— 原本寫死 1920×1080 與 fy=1527.4,
+    # 換一台感測器(comma2k19 是 1164×874)就會把地平線列算錯好幾十像素。
+    with Image.open(frames[0]) as im:
+        img_w, img_h = im.size
+    p2p, ground, _, intr = build_plane(Path(args.pointcloud), (img_h, img_w), args.hood_y)
     fwd_sharp = {q: float(p2p(*q)[1]) * args.pointcloud_scale for q in pts}
     order = sorted(pts, key=lambda q: -fwd_sharp[q])
     # SHARP 平面的地平線列:平面消失線 dy = a·dx + b 在光心列的位置
-    y_h_sharp = 539.5 + 1527.4 * ground["b"]
+    y_h_sharp = intr["cy"] + intr["fy"] * ground["b"]
     A_sharp = float(np.median([fwd_sharp[q] * (q[1] - y_h_sharp) for q in pts]))
 
     obs = row_pair_distances(sig, pts, period, args.dash_cycle_m)
@@ -180,7 +185,12 @@ def main() -> None:
     # (移 8.2 px)因而報出「不用修」,但每一組列對的實測都比預測低 8%。直接比值
     # 不需要做這個分解,而且片內一致性(hs005 ±3%、dc006 ±1.5%)本身就證明
     # 地平線大致正確 —— 地平線若錯,比值會隨列對系統性變化。
-    ratios = [d / (A_sharp / (a - y_h_sharp) - A_sharp / (b - y_h_sharp)) for a, b, d, _ in obs]
+    preds = [A_sharp / (a - y_h_sharp) - A_sharp / (b - y_h_sharp) for a, b, d, _ in obs]
+    ratios = [d / q for (_, _, d, _), q in zip(obs, preds)]
+    # 逐列對的原始觀測也寫出來:報告的證據圖畫的就是這一組點,不必重跑量測就能重畫。
+    result["row_pairs_detail"] = [[float(a), float(b), float(d), float(pk)] for a, b, d, pk in obs]
+    result["pred_m"] = [float(q) for q in preds]
+    result["meas_m"] = [float(o[2]) for o in obs]
     result["pair_ratios"] = [float(r) for r in ratios]
     result["ratio_spread"] = float(np.max(ratios) - np.min(ratios))
     result["distance_correction"] = float(np.median(ratios))

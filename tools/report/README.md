@@ -15,6 +15,10 @@
 | `gen.js` | 18 頁完整專案簡報(2026-07-12) |
 | `gen_progress.js` | 進度報告簡報(2026-08-03,教授看過並給四點指示的那份) |
 | `gen_progress2.js` | 進度報告簡報(2026-08-17,逐項答覆四點指示) |
+| `gen_progress3.js` | **進度報告簡報(2026-08-19,口試/繳交版,21 張)** —— 8/17 的內容全留(教授還沒看過),再加跨車輛驗證、第三種路類、SHARP 稽核、距離自校與前後對照 |
+| `gen_point1.js` | 單一主題簡報(2026-08-19):偵測器比較,回應教授第 ① 點。刻意與進度報告不同調——一頁一個想法、字少、表格當主角 |
+| `gen_radar_validation.js` | **單一主題簡報(2026-09-01,13 張):他車距離與速度對車載雷達的驗證** —— 沿用 `gen_point1.js` 的白話風格,主要是寫給使用者自己看懂並照著講的;最後兩張是整體驗證完成度一覽與下一步 |
+| `plot_distance_calib.py` | `data/output/dashcam_demo/_calib/effect.png`(讀 `_calib/*.json` 重畫,不必重跑量測) |
 | `prep_assets.sh` / `prep_assets2.sh` / `render_ply.py` | 從 `data/output/` 裁出簡報用圖與點雲渲染 |
 
 ## 跑法
@@ -24,7 +28,11 @@
 python3 tools/report/build_report.py
 
 # pptx（需要 pptxgenjs;node_modules 在 ~/tmp/pptx_build/,沒必要複製一份進版控）
-NODE_PATH=~/tmp/pptx_build/node_modules node tools/report/gen_progress2.js
+NODE_PATH=~/tmp/pptx_build/node_modules node tools/report/gen_progress3.js
+
+# 版面結構檢查(本機無法轉圖目視,這是替代品)
+python3 tools/report/check_pptx.py data/output/report_slides/專題進度報告_20260819.pptx
+python3 tools/report/check_pptx.py data/output/report_slides/他車量測驗證_雷達_20260903.pptx
 ```
 
 ## 圖片素材
@@ -36,6 +44,32 @@ NODE_PATH=~/tmp/pptx_build/node_modules node tools/report/gen_progress2.js
 ```bash
 REPORT_ASSETS=/path/to/assets python3 tools/report/build_report.py
 ```
+
+2026-08-19 新增的三張圖,重畫方式如下(全部可從版控內的程式重建):
+
+```bash
+# 距離校正的證據圖與效果圖
+python3 tools/report/plot_distance_calib.py
+cp data/output/dashcam_demo/_calib/effect.png ~/tmp/pptx_build/assets/
+
+# 修正前後對照(從 _calib 的對照影片抓一幀;t=8s 有三台帶距離標籤的車)
+ffmpeg -ss 8 -i data/output/dashcam_demo/_calib/hs005_before_after.mp4 -frames:v 1 \
+       -q:v 2 ~/tmp/pptx_build/assets/fig_dist_before_after.jpg
+ffmpeg -i ~/tmp/pptx_build/assets/fig_dist_before_after.jpg -filter_complex \
+  "[0:v]crop=1200:340:0:340[a];[0:v]crop=1200:340:0:1150[b];[a][b]vstack" \
+  -q:v 2 ~/tmp/pptx_build/assets/fig_dist_ba_zoom.jpg
+```
+
+2026-09-01 新增一張圖 `radar_eval.png`(4.12 節,對車載雷達的驗證證據圖),由
+
+```bash
+python3 tools/plot_radar_eval.py --json data/output/comma2k19_radar_eval/seg{21,6,10}.json \
+        --out data/output/comma2k19_radar_eval/radar_eval.png
+cp data/output/comma2k19_radar_eval/radar_eval.png ~/tmp/pptx_build/assets/
+```
+
+產生。該圖只讀評估器的 JSON,不必重跑量測;重跑量測的完整指令見
+`data/output/comma2k19_radar_eval/README.md`。
 
 2026-08-17 新增的四張圖(`fig_odo_fix.png`、`fig_position_step.png`、`fig_roadclass.jpg`、
 `fig_xt_daynight.png`)由 comma2k19 的評估輸出產生,重跑方式見
