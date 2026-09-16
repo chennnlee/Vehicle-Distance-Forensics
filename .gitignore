@@ -29,7 +29,11 @@ dist/
 *.log
 
 # Inference outputs / generated artifacts
-data/output/
+# Outputs stay out, but the per-folder READMEs are the reproduction
+# instructions and the record of what each number means -- they ship.
+data/output/**
+!data/output/**/
+!data/output/**/README.md
 **/depth_vis/
 **/depth_vis*.png
 Vehicle-Distance-Forensics/data/depth_vis.png

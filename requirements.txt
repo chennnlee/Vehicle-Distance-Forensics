@@ -1,12 +1,21 @@
+# 兩條管線的量測與評估
 numpy
+scipy
+pandas
 opencv-python
 matplotlib
-torch
-torchvision
-einops
+ultralytics          # YOLO 偵測/分割(會自行拉 torch、torchvision)
+
+# 讀人工標註真值(*_manual.xlsx)
+openpyxl
+
+# 產生報告與簡報(tools/report/;只跑量測的話不需要)
+python-docx
+python-pptx
+
+# 下載公開資料集
+requests
 huggingface-hub
-timm
-wandb
-mmengine
-mmcv-lite
-ultralytics
+
+# SHARP 單幀點雲重建有自己的環境需求,見 https://github.com/apple/ml-sharp
+# (einops / timm 等由它自己宣告,不列在這裡)
