@@ -1089,14 +1089,23 @@ def main() -> None:
     range_csv = out_dir / "ranges.csv"
     with range_csv.open("w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
-        w.writerow(["track_id", "class", "frame_idx", "t_s", "range_m", "lat_m", "rel_ms", "abs_kmh", "sens_m_per_px"])
+        # far_field marks rows whose per-pixel sensitivity puts them past the
+        # threshold the HUD and targets_summary.csv already honour: there the
+        # speed is withheld entirely. The distance is still written here (it is
+        # the only per-frame record), but it carries a median ~20% and worst
+        # ~72% bias out there, measured against a factory radar, so anything
+        # reading this file downstream must be able to see the flag.
+        w.writerow(["track_id", "class", "frame_idx", "t_s", "range_m", "lat_m", "rel_ms", "abs_kmh",
+                    "sens_m_per_px", "far_field"])
         for tid, rec in sorted(tracks.items()):
             if len(rec["obs"]) < int(args.fps) or rec.get("duplicate_of"):  # keep real tracks >= 1 s
                 continue
             for o in rec["obs"]:
                 abs_s = f"{o['abs_kmh']:.1f}" if o["abs_kmh"] is not None else ""
+                far = not np.isfinite(o["sens"]) or o["sens"] > args.max_sens_m_per_px
                 w.writerow([tid, rec["cls"], o["frame"], f"{o['t']:.3f}", f"{o['fwd_m']:.2f}",
-                            f"{o['lat_m']:.2f}", f"{o['rel_ms']:.2f}", abs_s, f"{o['sens']:.3f}"])
+                            f"{o['lat_m']:.2f}", f"{o['rel_ms']:.2f}", abs_s, f"{o['sens']:.3f}",
+                            1 if far else 0])
 
     # Per-target one-line summaries (report table): when/where each target was
     # measurable and its median absolute speed over trusted (near-range) obs.

@@ -429,17 +429,19 @@ s = slide();
 title(s, "適用邊界與待修正項目");
 
 s.addShape(p.ShapeType.roundRect, { x: 0.9, y: 1.98, w: 11.6, h: 2.05,
-  fill: { color: "FFF6F5" }, line: { color: "E8C9C5" }, rectRadius: 0.08 });
-s.addText("待修正:遠場的距離在逐幀資料檔中未加標示。",
-  { x: 1.15, y: 2.15, w: 11.1, h: 0.5, fontSize: 17.5, bold: true, color: BAD, fontFace: FONT });
-s.addText("標註影片與目標摘要檔的處理是正確的:影片於遠場改印灰色的 far-range,距離與速度皆不顯示;" +
-          "摘要檔亦把遠場速度分至獨立欄位。唯獨逐幀的 ranges.csv 仍逐筆寫出距離,僅附一個原始的" +
-          "靈敏度數值而無旗標。該檔正是供後續分析取用者,取用者若不知 0.8 m/px 這條界線," +
-          "便會把中位偏 20%、最差偏 72% 的距離當作有效量測值。",
-  { x: 1.15, y: 2.62, w: 11.1, h: 1.32, fontSize: 14, color: INK, fontFace: FONT, lineSpacingMultiple: 1.22 });
+  fill: { color: "F2F7F2" }, line: { color: "BFD8BF" }, rectRadius: 0.08 });
+s.addText("本次驗證指出的介面缺陷已修正:逐幀資料檔現已標示遠場。",
+  { x: 1.15, y: 2.15, w: 11.1, h: 0.5, fontSize: 17.5, bold: true, color: GOOD, fontFace: FONT });
+s.addText("標註影片與目標摘要檔的處理原本即為正確:影片於遠場改印灰色的 far-range,距離與速度皆不顯示;" +
+          "摘要檔亦把遠場速度分至獨立欄位。未處理者為逐幀的 ranges.csv——該檔逐筆寫出距離," +
+          "僅附一個原始的靈敏度數值,而它正是供後續分析取用的介面。" +
+          "現已增設 far_field 欄(判準與影片相同),既有欄位順序與內容不動以維持可比性。" +
+          "⚠ 偏差本身並未消失,只是被標示出來;遠場距離中位仍偏 20%、最差 72%。",
+  { x: 1.15, y: 2.62, w: 11.1, h: 1.32, fontSize: 13.5, color: INK, fontFace: FONT, lineSpacingMultiple: 1.18 });
 
 defList(s, [
-  ["遠場", "量測靈敏度 > 0.8 m/px(本次相機約 33 m、臺灣素材約 38 m 以外)。影片與摘要檔已正確處理,逐幀資料檔待補旗標。"],
+  ["遠場", "量測靈敏度 > 0.8 m/px(本次相機約 33 m、臺灣素材約 38 m 以外)。三個輸出介面現皆已標示;" +
+    "該偏差與偵測器無關(換用更高分數之模型後配對差僅 −0.01 公尺,區間含零)。"],
   ["側向擦身目標", "路側停放車輛或切入車輛,其遮罩最低點會隨視角沿車身移動,使距離變化率失真。" +
     "實測一例的接近率僅為自身車速的 −0.02 倍(對靜止物體,理論值應為 1.00)。此類目標僅應輸出距離。"],
   ["零速目標之驗證", "原規劃以路側停放車輛(真值恆為零)在臺灣素材上作同型檢定,結果為否定:" +
@@ -467,5 +469,5 @@ small(s, "資料集為公開取得(Hugging Face:commaai/comma2k19,MIT 授權)。
          "(comma2k19_radar_export.py / comma2k19_radar_eval.py / plot_radar_eval.py)、" +
          "逐影格配對結果與全部執行參數均已存檔,第三者可完整重現。", 6.33, { h: 1.0, size: 12 });
 
-p.writeFile({ fileName: "/home/s11244/code/114/Vehicle-Distance-Forensics/data/output/report_slides/他車量測外部驗證_雷達_20260916.pptx" })
+p.writeFile({ fileName: "/home/s11244/code/114/Vehicle-Distance-Forensics/data/output/report_slides/他車量測外部驗證_雷達_20260916b.pptx" })
   .then(f => console.log("已寫出", f));
