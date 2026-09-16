@@ -19,13 +19,28 @@ regression, which only requires the SAME points on both sides.
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
-ROOT = Path("/home/s11244/code/114/Vehicle-Distance-Forensics")
-DEMO = ROOT / "data/output/dashcam_demo"
-HAISHENG = ROOT / "data/20260317_AI辨速系統案例/20251230_海盛_AI辨速系統案例/汽車行車紀錄器 - 人工標註"
-BATCH = ROOT / "data/20260317_AI辨速系統案例/20251029_第三代AI辨速系統-案例/汽車行車紀錄器"
+# Paths were hard-coded to /home/s11244/code/114 -- the account this project was
+# developed on -- so importing this module anywhere else raised FileNotFoundError
+# before a single case could be listed. They now resolve from the repository the
+# file sits in, and each root can be pointed elsewhere with an environment
+# variable when the material lives outside the tree.
+ROOT = Path(os.environ.get("VDF_ROOT", Path(__file__).resolve().parents[1]))
+DEMO = Path(os.environ.get("VDF_DEMO", ROOT / "data/output/dashcam_demo"))
+HAISHENG = Path(os.environ.get(
+    "VDF_HAISHENG", ROOT / "data/input/海盛_20251230/汽車行車紀錄器 - 人工標註"))
+BATCH = Path(os.environ.get(
+    "VDF_BATCH", ROOT / "data/input/海盛_20251029/汽車行車紀錄器"))
+
+# hs005 is listed under DEMO as a re-encoded clip, but it is the 海盛 005 case and
+# its original is in HAISHENG. Falling back keeps the case runnable on a machine
+# that has the source packages but not the archived demo outputs.
+_FALLBACK = {
+    "hs005": HAISHENG / "005_白天_短1_O_A3min_B4min/Garmin GDR E530 壓線測試.mp4",
+}
 
 
 @dataclass
@@ -49,11 +64,19 @@ class Case:
 
 
 def _batch(pattern: str) -> Path:
-    hits = sorted(p for p in BATCH.rglob("*.mp4") if pattern in p.name and "_pred" not in p.name
-                  and "_manual" not in p.name)
-    if not hits:
-        raise FileNotFoundError(pattern)
-    return hits[0]
+    """Locate a 20251029 batch clip by the case number in its filename.
+
+    Returns a placeholder path rather than raising when the material is absent:
+    this runs at import time, and one missing clip used to make the whole table
+    -- including the fourteen cases that *are* present -- unimportable.
+    Use `availability()` to see what is actually on disk.
+    """
+    if BATCH.exists():
+        hits = sorted(p for p in BATCH.rglob("*.mp4")
+                      if pattern in p.name and "_pred" not in p.name and "_manual" not in p.name)
+        if hits:
+            return hits[0]
+    return BATCH / f"<missing:{pattern}>.mp4"
 
 
 CASES: list[Case] = [
@@ -102,3 +125,32 @@ CASES: list[Case] = [
 ]
 
 BY_NAME = {c.name: c for c in CASES}
+
+
+def resolved_src(case: "Case") -> Path:
+    """The clip to actually read, applying the DEMO -> HAISHENG fallback."""
+    if case.src.exists():
+        return case.src
+    alt = _FALLBACK.get(case.name)
+    return alt if alt and alt.exists() else case.src
+
+
+def availability() -> list[tuple[str, bool, Path]]:
+    return [(c.name, resolved_src(c).exists(), resolved_src(c)) for c in CASES]
+
+
+if __name__ == "__main__":
+    ok = 0
+    print(f"ROOT     {ROOT}")
+    print(f"DEMO     {DEMO}   {'✓' if DEMO.exists() else '✗ 不存在'}")
+    print(f"HAISHENG {HAISHENG}   {'✓' if HAISHENG.exists() else '✗ 不存在'}")
+    print(f"BATCH    {BATCH}   {'✓' if BATCH.exists() else '✗ 不存在'}")
+    print()
+    for name, present, src in availability():
+        ok += present
+        flag = "✓" if present else "✗"
+        note = BY_NAME[name].note
+        print(f"  {flag} {name:<8} {str(src)[-64:]}")
+        if note:
+            print(f"      {note}")
+    print(f"\n{ok}/{len(CASES)} 案的素材在本機可用")
