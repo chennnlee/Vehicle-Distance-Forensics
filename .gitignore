@@ -81,3 +81,12 @@ tools/ml-sharp/
 
 # Claude Code local session files
 .claude/
+
+# Vendored monocular depth model repos (clone separately per docs/DEPTH_MODEL_BENCHMARK.md)
+depth_models/
+
+# Depth benchmark outputs
+data/output/depth_benchmark/
+
+# Decoded frame caches (rebuildable from the source clips)
+data/input/_frames_cache/
