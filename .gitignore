@@ -81,3 +81,5 @@ tools/ml-sharp/
 
 # Claude Code local session files
 .claude/
+CLAUDE.md
+

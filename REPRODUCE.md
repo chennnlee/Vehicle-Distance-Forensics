@@ -7,7 +7,7 @@
 | | 在 repo 裡 | 怎麼補 |
 |---|---|---|
 | 程式碼 `tools/` | ✅ | — |
-| 執行參數 | ✅ `CLAUDE.md`「各案執行參數」 | — |
+| 執行參數 | ✅ `docs/CASE_PARAMETERS.md` | — |
 | 各項成果的方法與數字 | ✅ `data/output/**/README.md` | — |
 | 模型權重 | ❌ | `yolo` 首次執行自動下載,或見下方 |
 | SHARP 點雲 `.ply` | ❌ | 自己跑一次(只有他車距離需要) |
@@ -120,7 +120,7 @@ python3 tools/comma2k19_radar_eval.py --ranges <out>/ranges.csv --radar <out>/ra
 
 ## 已知失效邊界(不要當成 bug)
 
-誠實標示失效是本計畫的要求之一,完整清單在 `CLAUDE.md`,最常遇到的三條:
+誠實標示失效是本計畫的要求之一,完整清單在 `docs/FAILURE_BOUNDARIES.md`,最常遇到的三條:
 
 1. **碼表取樣率下限**:每個虛線週期需 ≳8 幀,即 `fps ≳ 8 × v / cycle`。
    KITTI 的 10 Hz 在高速段只有 5 幀/週期,八度選擇會崩潰。公開資料集要用 ≥25 fps 來源。

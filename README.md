@@ -52,7 +52,7 @@ OSD 時鐘秒跳定時(NVR 串流謊報 fps)→ YOLOv8-seg 接地點 → 平面�
 `dashcam_demo/`(行車紀錄器 demo,含白天多車三支)、`dashcam_validation/`
 (含 GT 對照的驗證案,20251029 批量 28 段 MAE 1.93 km/h、可信真值 23 段 1.37)、
 `cctv_validation/`(交比法對照 +0.5%)、`odometer_lag_audit/`(碼表邏輯稽核)。
-詳細執行參數與失效邊界見 `CLAUDE.md`。
+詳細執行參數見 `docs/CASE_PARAMETERS.md`,失效邊界見 `docs/FAILURE_BOUNDARIES.md`。
 
 > 早期探索(單眼深度估測 BEV:Depth-Anything/UniDepth/Metric3D/BEVFormer/MonoLayout)
 > 已於 2026-07 移除,程式碼見 git 歷史。
