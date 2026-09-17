@@ -145,7 +145,7 @@ def cmd_smoke(args):
             vram = _peak_vram_mb()
             print(f"    ✓ load {t_load:6.1f}s | infer {t_inf:6.2f}s | VRAM {vram:7.0f} MB")
             print(f"      range {fin.min():.2f} .. {fin.max():.2f} {unit}   median {np.median(fin):.2f}")
-            print(f"      predicted fx {fx} px  (fx/width = {fx_ratio}; SHARP assumes 0.7955)")
+            print(f"      predicted fx {fx} px  (fx/width = {fx_ratio}; SHARP's 30 mm rule: 0.7955 at 16:9)")
             rows.append(dict(model=name, kind=be.kind, ok=True, load_s=round(t_load, 1),
                              infer_s=round(t_inf, 3), vram_mb=round(vram),
                              fx_px=None if K is None else round(float(K[0, 0]), 1),
@@ -472,8 +472,9 @@ def main():
     s.add_argument("--patch", type=int, default=5)
     s.add_argument("--fx", type=float, default=None,
                    help="focal length in px handed to the backends that consume intrinsics "
-                        "(metric3d_v2, da3_metric); default is SHARP's fixed-FOV assumption "
-                        "0.7955*width, so this flag measures what that assumption costs")
+                        "(metric3d_v2, da3_metric); default 0.7955*width, which is SHARP's "
+                        "30 mm-equivalent focal on a 16:9 frame (on comma2k19's 4:3 frames "
+                        "SHARP would use 0.867*width); this flag measures what the choice costs")
     s.add_argument("--device", default="cuda")
     s.add_argument("--out", required=True)
     s.set_defaults(func=cmd_run)

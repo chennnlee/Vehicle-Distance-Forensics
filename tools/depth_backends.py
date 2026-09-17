@@ -203,8 +203,10 @@ class DA3Metric(Backend):
 
         The focal must be expressed in the *processed* image's pixels, because that
         is the resolution the depth tensor is at.  With no intrinsics supplied we
-        fall back to SHARP's fixed-FOV assumption (fx = 0.7955 * width), the same
-        fallback `metric3d_v2` uses, so the two are directly comparable.
+        fall back to fx = 0.7955 * width, the same fallback `metric3d_v2` uses, so
+        the two are directly comparable.  (0.7955 is what SHARP's 30 mm-equivalent
+        rule gives a 16:9 frame; on a 4:3 frame such as comma2k19's 1164x874 SHARP
+        itself would use 0.867 * width.)
 
         ⚠ So DA3METRIC is *not* camera-agnostic: like Metric3D it needs a focal
         length, and its metres inherit whatever error that focal carries.
@@ -278,10 +280,11 @@ class Metric3DV2(Backend):
     INPUT_SIZE = (616, 1064)   # the ViT variants' canonical input; ConvNeXt uses (544, 1216)
 
     def infer(self, bgr, fx=None):
-        """Metric3D needs intrinsics.  With none supplied we fall back to the same
-        fixed-FOV assumption SHARP makes (fx = 0.7955 * width), so the comparison
-        against SHARP is apples to apples -- and so the number quantifies exactly
-        how much that assumption costs.
+        """Metric3D needs intrinsics.  With none supplied we fall back to
+        fx = 0.7955 * width -- SHARP's 30 mm-equivalent focal on a 16:9 frame.  SHARP
+        scales that rule with the image diagonal, so on a 4:3 frame (comma2k19,
+        1164x874) it would use 0.867 * width instead; the fallback is kept fixed so
+        existing results reproduce, and `run --fx` measures what the choice costs.
 
         The resize-and-pad to the canonical input size is not optional: the model
         expects it, and feeding a full-resolution frame straight in both breaks the

@@ -2,10 +2,11 @@
 # What does the focal length a metric model is handed actually buy?
 #
 # metric3d_v2 and da3_metric both take fx as an input and scale their metres by it.
-# Their raw scores in docs/DEPTH_MODEL_BENCHMARK.md were obtained with SHARP's fixed
-# assumption fx = 0.7955*width = 926 px, which happens to be within 2% of this
-# camera's documented 910 px -- so the raw column may be measuring the assumption
-# rather than the model. Sweeping fx separates the two. Resumable like the blind run.
+# Their raw scores in docs/DEPTH_MODEL_BENCHMARK.md were obtained with the default
+# fx = 0.7955*width = 926 px (SHARP's 30 mm rule on a 16:9 frame; on this 4:3 camera
+# SHARP itself uses 1009 px), which happens to be within 2% of this camera's
+# documented 910 px -- so the raw column may be measuring the assumption rather than
+# the model. Sweeping fx separates the two. Resumable like the blind run.
 set -u
 cd "$(dirname "$0")/.."
 P=${VDF_PY:-~/venvs/depthbench/bin/python}
