@@ -83,3 +83,13 @@ tools/ml-sharp/
 .claude/
 CLAUDE.md
 
+
+# Vendored monocular depth model repos (clone separately per docs/DEPTH_MODEL_BENCHMARK.md)
+depth_models/
+
+# Depth benchmark outputs are covered by the data/output/** rule above, which
+# lets each folder's README through; naming the directory here would shut that
+# off, because a file cannot be re-included once its directory is excluded.
+
+# Decoded frame caches (rebuildable from the source clips)
+data/input/_frames_cache/
