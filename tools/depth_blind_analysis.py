@@ -14,16 +14,24 @@ them uses the radar to calibrate; it is only ever the thing being scored against
             Road and contact distances both come from the lane markings, so the
             first two columns are what a deployed system can actually do.
 
-  samerow   Road pixel and vehicle contact pixel on the *same image row*.  Both lie
-            on the road surface about 1.5 m apart, so their true distance is equal
-            and any difference in the model's reading is the model contradicting
-            itself.  Needs no ground truth at all.
+  samerow   Road pixel and vehicle target pixel on the *same image row*, together
+            with what pure geometry says their ratio must be.  The target pixel is
+            the median of the mask's lowest 12% of rows, which sits 6-8 px ABOVE the
+            mask's lowest point -- on the car body, not on the road -- so at the same
+            row the road really is farther away.  (Until 2026-09-17 this check assumed
+            both pixels were on the road and read the 5-16% gap as the model
+            contradicting itself; the geometry accounts for it.)  Needs
+            `--contact-defs`, a CSV with py_band / py_max per target frame.
 
   holdout   Calibrate on the first half of the frames, score on the second (and the
             reverse), so the constant is never fitted on the rows it scores.
 
   transfer  Calibrate on one segment, score on another recorded on a different day
             with the same camera -- "calibrate the camera once and reuse it".
+
+  methodc   Method C itself against the radar, under both contact-point definitions
+            and both mounting offsets, because its accuracy depends on both and
+            neither is pinned independently (docs section 18).
 
 Usage:
   python3 tools/depth_blind_analysis.py --all
@@ -39,14 +47,18 @@ import numpy as np
 
 D = Path("data/output/depth_benchmark")
 
-# Method C geometry per segment: A = h*f from the dash cycle, y_h from the lane-line
-# vanishing point.  Both solved without a neural network; see docs section 15.
+# Method C geometry per segment: A = h*f from the dash cycle's time lag between image
+# rows (tools/vanishing_point_range_calib.py), y_h from the lane-line vanishing point.
+# Both solved without a neural network; see docs sections 15 and 18.
+# The A values used before 2026-09-17 (1153 / 1139) were an artefact of the old
+# single-frame tool's read band, not a measurement -- see docs section 18.
 SEGMENTS = {
-    "seg10": dict(tag="b0c9d2329ad1606b_2018-07-30--13-44-30_10", A=1153.0, y_h=383.2),
-    "seg21": dict(tag="b0c9d2329ad1606b_2018-08-15--09-01-03_21", A=1139.0, y_h=378.7),
+    "seg10": dict(tag="b0c9d2329ad1606b_2018-07-30--13-44-30_10", A=1238.0, y_h=383.2),
+    "seg21": dict(tag="b0c9d2329ad1606b_2018-08-15--09-01-03_21", A=1242.0, y_h=378.7),
 }
 MODELS = ["metric3d_v2", "unidepth_v2", "da3_metric", "depth_anything_v2_vits", "depth_pro"]
-DELTA_M = 2.0          # radar sits on the bumper, the camera is behind it (section 15.4)
+DELTA_M = 2.0          # radar sits on the bumper, the camera is behind it; set by --delta-m.
+                       # Not pinned independently -- the results depend on it (section 18).
 
 
 def _rows(fp: Path) -> list[dict]:
@@ -105,7 +117,9 @@ def cmd_sources(args):
             d = load(seg, m, args.near_m)
             an = _rows(D / f"anchor_{s['tag']}__{m}.csv")
             ap = np.array([float(r["pred"]) for r in an])
-            ad = np.array([float(r["marking_d_m"]) for r in an])
+            # Recomputed from the pixel row rather than read from the CSV: the stored
+            # marking_d_m column was written with the withdrawn A values.
+            ad = s["A"] / (np.array([float(r["py"]) for r in an]) - s["y_h"])
             bd = _rows(D / f"body_pred_{s['tag']}__{m}.csv")
             bp = np.array([float(r["pred"]) for r in bd])
             bg = np.array([float(r["radar_range_m"]) for r in bd]) + DELTA_M
@@ -128,30 +142,40 @@ def cmd_sources(args):
 
 
 def cmd_samerow(args):
-    print("同一影像列上,路面像素 vs 車輛接地像素的模型讀值比(|Δpy| ≤ 6 px)")
-    print("兩點都在路面上、橫向差約 1.5 m,真實距離相同 → 偏離 1.0 即模型自相矛盾,不需要真值\n")
-    print(f"{'seg':<7}{'model':<24}{'n':>5}{'路面/車輛 中位':>16}{'IQR':>18}")
+    print("同一影像列上,路面像素 vs 目標車取樣像素的模型讀值比(|Δpy| ≤ 6 px),以及純幾何的預期值")
+    print("目標取樣點(遮罩最低 12% 列的中位)在遮罩最低點上方 6–8 px,位於車身上而不是路面上,")
+    print("所以同一列的路面本來就比較遠:預期比 = (最低點列 − y_h)/(路面列 − y_h)。實測/預期 ≈ 1 表示模型讀對了\n")
+    defs = {}
+    if Path(args.contact_defs).exists():
+        for r in _rows(Path(args.contact_defs)):
+            defs[(r["tag"], r["frame_idx"])] = (float(r["py_band"]), float(r["py_max"]))
+    else:
+        print(f"  (找不到 {args.contact_defs},只印實測比;產生方式見 tools/contact_point_definitions.py)\n")
+    print(f"{'seg':<7}{'model':<24}{'n':>5}{'實測 路面/車輛':>16}{'幾何預期':>10}{'實測/預期':>10}")
     for seg, s in SEGMENTS.items():
         for m in MODELS:
             by_frame: dict[str, list] = {}
             for r in _rows(D / f"anchor_{s['tag']}__{m}.csv"):
                 by_frame.setdefault(r["frame_idx"], []).append((float(r["py"]), float(r["pred"])))
-            rat = []
+            rat, exp = [], []
             for r in _rows(D / f"unf_{s['tag']}__{m}.csv"):
                 cand = by_frame.get(r["frame_idx"])
                 vpy, vp = float(r["py"]), float(r["pred"])
                 if not cand or vp <= 0:
                     continue
-                gap, _, q = min((abs(p - vpy), p, q) for p, q in cand)
+                gap, p, q = min((abs(p - vpy), p, q) for p, q in cand)
                 if gap <= 6 and q > 0:
                     # disparity rises as depth falls, so the relative backend inverts
                     rat.append(q / vp if r["kind"] == "metric" else vp / q)
+                    d = defs.get((s["tag"], r["frame_idx"]))
+                    exp.append((d[1] - s["y_h"]) / (p - s["y_h"]) if d else np.nan)
             if len(rat) < 5:
                 print(f"{seg:<7}{m:<24}{len(rat):>5}   (配對不足)")
                 continue
-            a = np.asarray(rat)
-            print(f"{seg:<7}{m:<24}{len(a):>5}{np.median(a):>16.3f}"
-                  f"      [{np.percentile(a, 25):.3f}, {np.percentile(a, 75):.3f}]")
+            a, e = np.asarray(rat), np.asarray(exp)
+            ok = np.isfinite(e)
+            tail = (f"{np.median(e[ok]):>10.3f}{np.median(a[ok] / e[ok]):>10.3f}" if ok.sum() >= 5 else "")
+            print(f"{seg:<7}{m:<24}{len(a):>5}{np.median(a):>16.3f}{tail}")
     print()
 
 
@@ -197,16 +221,47 @@ def cmd_transfer(args):
     print()
 
 
+def cmd_methodc(args):
+    print("方法 C 對雷達:兩種接地點定義 × 兩種安裝偏移 Δ(配對集,近場 < %.0f m)" % args.near_m)
+    print("band = 遮罩最低 12% 列的中位(本 benchmark 的目標像素);lowest = 遮罩最低點(管線 B 的定義)\n")
+    if not Path(args.contact_defs).exists():
+        print(f"  找不到 {args.contact_defs}:先跑 tools/contact_point_definitions.py\n")
+        return
+    lowest = {(r["tag"], r["frame_idx"]): float(r["py_max"]) for r in _rows(Path(args.contact_defs))}
+    print(f"{'seg':<7}{'定義':<8}{'Δ':>5}{'n':>6}{'中位誤差':>10}{'p90':>8}{'真值/我方':>11}")
+    for seg, s in SEGMENTS.items():
+        rows = [r for r in _rows(D / f"paired_{s['tag']}.csv") if (s["tag"], r["frame_idx"]) in lowest]
+        rad = np.array([float(r["radar_range_m"]) for r in rows])
+        band = np.array([float(r["py"]) for r in rows])
+        low = np.array([lowest[(s["tag"], r["frame_idx"])] for r in rows])
+        for name, py in (("band", band), ("lowest", low)):
+            for delta in (0.0, 2.0):
+                gt = rad + delta
+                n = gt < args.near_m
+                d = s["A"] / (py[n] - s["y_h"])
+                e = np.abs(d - gt[n]) / gt[n] * 100
+                print(f"{seg:<7}{name:<8}{delta:>5.1f}{int(n.sum()):>6}{np.median(e):>9.2f}%"
+                      f"{np.percentile(e, 90):>7.1f}%{np.median(gt[n] / d):>11.3f}")
+    print()
+
+
 def main():
+    global DELTA_M
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("check", nargs="?", choices=["sources", "samerow", "holdout", "transfer"])
+    ap.add_argument("check", nargs="?", choices=["sources", "samerow", "holdout", "transfer", "methodc"])
     ap.add_argument("--all", action="store_true")
     ap.add_argument("--near-m", type=float, default=32.0)
+    ap.add_argument("--delta-m", type=float, default=DELTA_M,
+                    help="added to the radar range to put it in the camera frame; not pinned "
+                         "independently, so run 0 and 2 and report both (docs section 18)")
+    ap.add_argument("--contact-defs", default=str(D / "contact_defs.csv"),
+                    help="CSV from tools/contact_point_definitions.py, used by samerow")
     args = ap.parse_args()
-    checks = [cmd_sources, cmd_samerow, cmd_holdout, cmd_transfer] if args.all or not args.check \
-        else [dict(sources=cmd_sources, samerow=cmd_samerow,
-                   holdout=cmd_holdout, transfer=cmd_transfer)[args.check]]
+    DELTA_M = args.delta_m
+    checks = [cmd_methodc, cmd_sources, cmd_samerow, cmd_holdout, cmd_transfer] if args.all or not args.check \
+        else [dict(sources=cmd_sources, samerow=cmd_samerow, holdout=cmd_holdout,
+                   transfer=cmd_transfer, methodc=cmd_methodc)[args.check]]
     for fn in checks:
         fn(args)
     return 0

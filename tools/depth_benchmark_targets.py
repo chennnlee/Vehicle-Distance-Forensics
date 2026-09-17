@@ -12,16 +12,21 @@ Per frame, among YOLO's car/bus/truck instances:
 
   * the mask's horizontal centre must sit within `--centre-tol-px` of the image
     centre column -- i.e. the vehicle is in our own lane, not a neighbour;
-  * of those, the *nearest* one wins, taken as the largest mask area.
+  * of those, the *nearest* one wins, taken as the lowest contact row (the largest
+    mask can be a distant lorry).
 
-The contact point is the median of the mask's lowest `--contact-pct` of rows,
-the same definition pipeline B uses, so the two are directly comparable.
+The contact point is the median of the mask's lowest `--contact-pct` of rows.
+⚠ This is NOT pipeline B's definition, although this docstring said so until
+2026-09-17: `dashcam_range_speed.py` uses the lowest point of the mask polygon.
+On comma2k19 the band median sits 8.4 px (seg10) / 5.9 px (seg21) above that
+lowest point -- on the car body, not the road -- which moves a ground-plane range
+by roughly 10-15% at 20-30 m.  `tools/contact_point_definitions.py` measures both.
 
 How the radar row is chosen
 ---------------------------
-In the same frame, the radar return with the smallest |lateral| offset, subject
-to |lateral| <= `--lane-half-width-m`.  That is the same in-lane test
-`comma2k19_radar_eval.py` applies.
+In the same frame, the NEAREST radar return with |lateral| <= `--lane-half-width-m`
+(the same in-lane test `comma2k19_radar_eval.py` applies).  Picking the most centred
+return instead pairs the wrong car when two share the lane.
 
 Two guards, both of which exist because the naive version is wrong
 ------------------------------------------------------------------

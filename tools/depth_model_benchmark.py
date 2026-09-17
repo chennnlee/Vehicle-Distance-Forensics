@@ -413,7 +413,15 @@ def cmd_blind(args):
             print(f"{model:<24}   (no calibration rows)")
             continue
         kind = cal[model][0].get("kind", "metric")
-        cp, cd = _cols(cal[model], args.calib_dist_col)
+        if args.geom:
+            # d = A/(py - y_h) straight from the pixel row, so a stale distance column
+            # written with an earlier A cannot leak in (docs section 18)
+            A, y_h = (float(x) for x in args.geom.split(","))
+            cal_rows = [dict(r, _geom_d=A / (float(r["py"]) - y_h)) for r in cal[model]
+                        if float(r["py"]) > y_h]
+            cp, cd = _cols(cal_rows, "_geom_d")
+        else:
+            cp, cd = _cols(cal[model], args.calib_dist_col)
         pp, pg = _cols(prd[model], args.gt_dist_col)
         if cp.size == 0 or pp.size == 0:
             print(f"{model:<24}   (no usable rows)")
@@ -482,11 +490,16 @@ def main():
     s.add_argument("--calib", nargs="+", required=True,
                    help="CSV(s) from `run` on marking-derived road anchors; globs allowed")
     s.add_argument("--calib-dist-col", default="marking_d_m")
+    s.add_argument("--geom", default="",
+                   help="'A,y_h' of Method C; recompute the calibration distance from each "
+                        "row's py instead of reading --calib-dist-col. Use this: the "
+                        "marking_d_m columns on disk were written with a withdrawn A")
     s.add_argument("--pred", nargs="+", required=True, help="CSV(s) from `run` on the targets")
     s.add_argument("--gt-dist-col", default="radar_range_m")
     s.add_argument("--delta-m", type=float, default=0.0,
                    help="added to the truth to bring it into the camera frame (radar is at "
-                        "the bumper); 2.0 for this car, see docs/DEPTH_MODEL_BENCHMARK.md")
+                        "the bumper). Not pinned independently -- report 0 and 2.0, see "
+                        "docs/DEPTH_MODEL_BENCHMARK.md section 18")
     s.add_argument("--near-m", type=float, default=32.0)
     s.set_defaults(func=cmd_blind)
 
