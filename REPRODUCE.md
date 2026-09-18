@@ -1,6 +1,7 @@
 # 重現指南
 
 給拿到這個 repo、想自己把數字跑出來的人。
+下面兩條路線(自車速/他車)都屬於**管線 B(行車紀錄器)**;管線 A 已停止投入,見「不能重現的部分」。
 
 ## 你有什麼、缺什麼
 
@@ -26,50 +27,77 @@ CUDA 非必要,但沒有 GPU 的話 YOLO 會慢很多(本專案在 RTX 4050 6 GB
 
 ---
 
-## 路徑 A:自車速 —— 最容易,不需要 SHARP,也不需要任何非公開素材
+## 路線一:自車速 —— 最容易,不需要 SHARP,也不需要任何非公開素材
 
-**這是本專案最紮實的一條鏈**,對兩台車 33 段 35,809 幀的公開資料集實測 MAE **2.18 km/h**。
+**這是本專案最紮實的一條鏈**,對兩台車 33 段 35,809 幀的公開資料集實測 MAE **2.18 km/h**
+(對 GNSS/INS 位姿真值)。
 之所以不需要 SHARP:自車速是用「法定虛線週期流過固定畫面列」的時間量的,
 完全不經過點雲、平面或尺度。
 
 ```bash
-# 1) 下載(8.7 GB;MIT 授權)
+# 1) 下載兩個 chunk(MIT 授權)。comma2k19 全資料集只有兩台車:
+#    Chunk_1 = 車 1 b0c9d2(8.7 GB)、Chunk_3 = 車 2 99c94d(9.4 GB);再多抓 chunk 不會增加車輛數
+#    (Chunk_2 屬車 1、Chunk_4–10 屬車 2;見 comma2k19_eval/README.md 4-2-1 的 dongle/chunk 表)
 mkdir -p data/input/comma2k19
-curl -L -o data/input/comma2k19/Chunk_1.zip \
-  https://huggingface.co/datasets/commaai/comma2k19/resolve/main/raw_data/Chunk_1.zip
+for c in 1 3; do
+  curl -L -o data/input/comma2k19/Chunk_$c.zip \
+    https://huggingface.co/datasets/commaai/comma2k19/resolve/main/raw_data/Chunk_$c.zip
+done
+
+# 2)–4) 對兩個 zip 各跑一次(工具一次只吃一個 --zip),輸出目錄分開;以下以 Chunk_1 為例,
+#       Chunk_3 把 Chunk_1 / _c1 換成 Chunk_3 / _c3 即可
 
 # 2) 先只掃真值、不解碼影格(快),看 segments.csv 挑段
 python3 tools/comma2k19_prepare.py --zip data/input/comma2k19/Chunk_1.zip \
-  --out-root /tmp/comma_scan --same-route --no-frames
+  --out-root /tmp/comma_scan_c1 --same-route --no-frames
 
 # 3) 依「整段最低速 >= 60 km/h」選段(事前可宣告的規則,不看真值誤差)
+#    預期挑出車 1 19 段、車 2 15 段
 python3 tools/comma2k19_select.py --zip data/input/comma2k19/Chunk_1.zip --min-floor 60
 python3 tools/comma2k19_prepare.py --zip data/input/comma2k19/Chunk_1.zip \
-  --out-root /tmp/comma_seg --segments "<上一步印出的段落>"
+  --out-root /tmp/comma_seg_c1 --segments "<上一步印出的段落>"
 
-# 4) 評估(自動挑取樣點,不需人工指定)
-python3 tools/public_dataset_ego_eval.py --batch-root /tmp/comma_seg --fps 20.0 \
+# 4) 評估(自動挑取樣點,不需人工指定);--dump-dir 留下逐幀結果,合併兩車時要用
+python3 tools/public_dataset_ego_eval.py --batch-root /tmp/comma_seg_c1 --fps 20.0 \
   --auto-points --road-top 0.48 --road-bottom 0.68 \
   --gt-file gt_both.csv --gt-column can_kmh --alt-column pose_kmh \
   --solve-cycle --dash-cycle-m 14.63 \
-  --out-json /tmp/batch.json
+  --dump-dir /tmp/comma_dump_c1 --out-json /tmp/batch_c1.json
 ```
 
 ⚠ **`--dash-cycle-m 14.63` 是加州高速公路的規格(48 ft)**,不是通用常數。台灣國道實測是 10 m
 (不是規範寫的 12 m)。換路網一定要先用 `--solve-cycle` 反推驗證——
 虛線週期是「每條路的常數」,不是「每支影片的常數」。
 
-**預期數字**(`data/output/comma2k19_eval/README.md` 有完整分層):
+**預期數字**(全表同一族群:上面的事前選段規則、cycle 14.63 m;
+出處 `data/output/comma2k19_eval/README.md` 4-2-3):
 
-| 條件 | MAE |
-|---|---|
-| 兩台車 33 段合計 | 2.18 km/h(±3 內 82.2%、覆蓋 90.4%) |
-| 日間高速公路 | 1.78 |
-| 夜間高速公路 | 4.72(逆反射路釘是已知較弱情境) |
+⚠ 第 4 步印出的主欄 `mae_kmh` 是對 **CAN 車速**(`--gt-column can_kmh`);2.18 用的是
+**GNSS/INS 位姿真值**;每個 zip 的輸出 json 裡,位姿那一欄在 `alt.mae_kmh`(車 1 為 1.98、車 2 為 4.23),
+2.18 要把兩車逐幀檔合併才算得出(見表下說明)。兩台車的 CAN 相對位姿各有 0.69–1.09%
+的乘性偏差、方向相反(該 README 4-2-5),所以兩欄會不同。
+
+| 子集 | 對位姿(`alt.mae_kmh`) | 對 CAN(主欄) |
+|---|---|---|
+| 車 1(Chunk_1,19 段) | 1.98 | 2.80 |
+| 車 2(Chunk_3,15 段全部) | 4.23 | 3.89 |
+| 車 2 排除一段高速連接道(14 段) | 2.49 | 2.16 |
+| **兩車合計 33 段(排除該段)** | **2.18**(±3 內 82.2%、覆蓋 90.4%) | 2.54 |
+| 兩車合計 34 段(含該段) | 2.91 | 3.25 |
+
+- 車 2 的 4.23 幾乎全由單一段 `99c94dc769b5d96e_2018-06-12--00-59-15_7` 造成(單段 MAE 40.44):
+  它以 90–96 km/h 定速穿過週期約 10 m 的高速連接道,「最低速 ≥ 60」擋不住
+  (見 `docs/FAILURE_BOUNDARIES.md`)。該段是事後單獨列出的,所以 33 段與 34 段兩個數字都要報。
+- 合計是兩車逐幀結果合併(21,421 + 14,388 = 35,809 幀),單一 json 不會直接印出;
+  要用 `--dump-dir` 留下的逐幀檔(含 CAN 與位姿真值)自己合併。
+- 同一族群的日夜分層(車 1):日間 2.14、夜間 1.69。需另跑 `tools/comma2k19_domain_eval.py`
+  (照度那一欄要讀影格)。
+- ⚠ 舊版本表列過的「日間 1.78 / 夜間 4.72」屬於**另一族群**(Chunk_1 以中位速 ≥ 70 挑的 24 段、
+  事後用位置排除幹道),是該 README 第二節的診斷分層,方向與上面相反,不要並列在同一張表。
 
 ---
 
-## 路徑 B:他車距離與絕對速度 —— 需要 SHARP
+## 路線二:他車距離與絕對速度 —— 需要 SHARP
 
 三段有原廠雷達的 comma2k19 片段,近場距離誤差中位 **7.0%**、目標絕對速 MAE **3.54 km/h**。
 完整參數在 `data/output/comma2k19_radar_eval/README.md` 第三節(ply、scale、碼表取樣點、車道線像素對全部列出)。

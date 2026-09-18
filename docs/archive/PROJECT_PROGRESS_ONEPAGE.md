@@ -1,3 +1,7 @@
+> 📦 **歷史文件（2026-07 初，單幀 SHARP+YOLO demo 時期），已過時；現況見 [README.md](../../README.md)。**
+> 文中列的 `main.py`、`core/depth_engine.py`、`core/calibration.py`、`utils/visualizer.py`、`tools/sharp_to_bev.py`
+> 已不存在，§8 的指令無法原樣重跑；§6「BEVFormer / modern mmdetection3d 路線保留」「行車紀錄器相對運動補償尚未完成」也與現況不符。
+
 # Vehicle-Distance-Forensics 一頁式進度摘要
 
 ## 1. 專案目標
@@ -53,7 +57,7 @@ Depth Anything V2、UniDepth V2、Metric3D 仍保留作為 baseline 或後續比
 - SHARP 車距 demo：tools/sharp_yolo_distance.py
 - SHARP 點雲 BEV：tools/sharp_to_bev.py
 - 點雲讀取：utils/pointcloud_io.py
-- 重新提案：docs/SHARP_DEMO_REPROPOSAL.md
+- 重新提案：docs/archive/SHARP_DEMO_REPROPOSAL.md
 
 ## 5. 產出位置
 - 輸出根目錄：data/output/

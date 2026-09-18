@@ -8,6 +8,8 @@
 **也就是說,舊影片不代表現在的系統。** 這裡是用現行程式碼 + 各案正確參數重跑的結果。
 
 輸出在 `dashcam_demo/<案名>_current/`(csv + `range_speed_h264.mp4`)。
+(2026-09-18 註:`_current/` 的距離**已套**修正係數(dc003 / dc007 為 1.0,距離未經縱向校正),
+`ranges.csv` 有 `far_field` 欄;引用時**不要再乘係數**。三層資料夾的對照見上層 `dashcam_demo/README.md` 開頭。)
 
 ## 怎麼看
 
@@ -15,6 +17,12 @@
 另有 `dc008_` 與 `dc006_` 兩支。看畫面上目標車的距離標籤:下排比上排小 10~24%。
 
 **量化**:`rerun_range.png`(距離)、`rerun_ego.png`(自車速)、`rerun_summary.csv`(全部欄位)。
+
+(2026-09-18 補註)本檔「→」左邊的封存基準:dc00x 用 `<案名>_trackv3/`,hs005 / wow001 用基底資料夾
+(這兩支沒有 trackv3 層)。**覆蓋率**(本檔與 `rerun_summary.csv` 的 `ego_cov_*`)= 有自車速值的幀
+(`ego_speed.csv` 的 `ego_visual_kmh` 非空),含 ≤2s 內插與 1s 中位數濾波補上的值;各案 README 的
+「碼表覆蓋」只計碼表直接鎖定的幀,口徑較嚴——同一份 wow001 封存輸出,這裡是 85.7%,
+`wow001/README.md` 記 74%。
 
 ## 三層改進,只有一層看得見
 
@@ -95,7 +103,7 @@ hs005 有人工畫格法真值,可以直接判優劣:**封存 MAE 0.687 → 現�
 
 ## 順帶抓到並修正:dc002 / dc008 的 hood-y 是猜的,而且猜錯了
 
-這兩支封存時沒有記錄 hood-y,CLAUDE.md 帶的是目視讀出的「850 / 950」。
+這兩支封存時沒有記錄 hood-y,當時的專案筆記(未版控)帶的是目視讀出的「850 / 950」。
 hood-y 是**地面平面擬合 ROI 的下緣**,猜錯就擬到不同的平面——dc008 的隱含地平線因此差 9.5 px、
 距離差約 6%,重跑與封存完全不可比(上面第 1 項自我檢查就是這樣抓到的)。
 
@@ -109,7 +117,7 @@ hood-y 是**地面平面擬合 ROI 的下緣**,猜錯就擬到不同的平面—
 
 **兩支的逐對散布同時變小**,這是「900 才對」的獨立佐證。
 ⚠ 舊記錄寫「係數對 hood-y 不敏感,差 1.6%」是低估,實際 2.4% / 3.6%。
-已同步更新 CLAUDE.md、`_calib/*.json`(舊檔移到 `_calib/superseded_wrong_hood/`)、
+已同步更新當時的專案筆記(現行參數已移到 `docs/CASE_PARAMETERS.md`)、`_calib/*.json`(舊檔移到 `_calib/superseded_wrong_hood/`)、
 報告表 6 與 `dashcam_demo/README.md`。
 
 ## 限制
@@ -127,7 +135,7 @@ hood-y 是**地面平面擬合 ROI 的下緣**,猜錯就擬到不同的平面—
 ```bash
 # 1) 影格(/tmp 會消失)
 ffmpeg -i data/output/dashcam_demo/<案名>/original_clip_h264.mp4 -vsync 0 -qscale:v 2 <dir>/f%05d.jpg
-# 2) 參數見 CLAUDE.md「各案執行參數」,加上 --distance-correction
+# 2) 參數見 docs/CASE_PARAMETERS.md,加上 --distance-correction
 # 3) 對照圖與摘要
 python3 tools/report/plot_demo_rerun.py
 ```

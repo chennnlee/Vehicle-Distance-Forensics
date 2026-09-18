@@ -1,5 +1,18 @@
 # 偵測器模型比較(YOLO-seg 五候選)— 2026-07-11
 
+> ⚠ **2026-09-18 狀態更新(先讀這段)**:
+> - **結論 1 第二點與結論 2 引用的 0.40 km/h 已不能當證據**:它取自下方「dc006 跟車自洽」,
+>   而那個檢查是循環的(`abs = ego + rel`,篩穩定跟車就是篩 `|rel|` 小)。已由
+>   `data/output/detector_vs_radar/README.md` 的原廠雷達受控比較取代:目標絕對速度配對差
+>   +0.03 km/h(block 95% CI −0.68…+0.78,含 0)、近場距離相對誤差 7.49%→5.77%。
+>   **結論方向對速度不變**(偵測器不是瓶頸、維持 `yolov8m-seg`),換掉的是依據與量級;
+>   對近場距離則有約 1.7 個百分點的影響。
+> - **結論 3 與 Stage 1 觀察第三點的夜間 CCTV 建議不再適用**:管線 A(固定式路口 CCTV)已於
+>   2026-09-16 停止投入(素材的交比目標全是機車),程式與成果保留、不再更新。
+> - **結論 4 的微調資料集**:本專案的接地點取自遮罩底緣,只有框的資料集(UA-DETRAC、BDD100K 主集等)
+>   微調不到遮罩頭;若要做,正解是 nuImages,見 `docs/PUBLIC_DATASET_BENCHMARK_PLAN.md` 第一節 C。
+> - Stage 1 偵測級表與 qz1130221 端到端表仍有效。
+
 **目的**:管線 A/B 的偵測器至今沿用 `yolov8m-seg`(COCO 預訓練、未微調)。本比較系統性檢驗
 五個現成候選在**本專案實際場景**上的表現,決定預設模型,並回答「偵測器是不是精度瓶頸」。
 
@@ -83,6 +96,9 @@ v8s-seg / v8m-seg(現用)/ v8x-seg / 11m-seg / 11x-seg
 **量測精度打平**(0.40 km/h——遠小於 scale 校正的不確定度);11x 多出的 13% 觀測
 集中在遠場帶(far-range,不給速度的區域)。
 
+> ⚠ 2026-09-18 狀態更新:此表的 |abs−ego| 是循環量(見檔首),0.40 km/h 不代表接地點鏈的精度;
+> 非循環的比較見 `data/output/detector_vs_radar/README.md`。
+
 ## 結論與建議
 
 1. **預設模型維持 `yolov8m-seg`**:
@@ -101,6 +117,9 @@ v8s-seg / v8m-seg(現用)/ v8x-seg / 11m-seg / 11x-seg
 ## 重現
 
 - 原始偵測+指標腳本:`scripts/`(collect_detections.py / analyze_detections.py / self_consistency.py)
-- qz1130221 端到端:CLAUDE.md 執行參數 + `--yolo-model checkpoints/yolo11x-seg.pt`
+  ⚠ 此資料夾只在本機、未進版控;腳本內寫死 /tmp 幀目錄與當時 session 的暫存路徑,要改路徑才能重跑。
+- qz1130221 端到端:`docs/CASE_PARAMETERS.md` 的 qz1130221 參數(完整指令見
+  `data/output/cctv_validation/qz1130221/README.md`「執行參數」)+ `--yolo-model checkpoints/yolo11x-seg.pt`
 - 幀目錄:/tmp/dc006_frames、/tmp/dc003_frames、/tmp/c7828_frames、/tmp/rec_kh013、
-  /tmp/rec_qz1130221(重建指令見 CLAUDE.md)
+  /tmp/rec_qz1130221(/tmp 會消失;rec_qz1130221 的重建指令見 `data/output/cctv_validation/qz1130221/README.md`,
+  其餘以 `ffmpeg -i <原片> -vsync 0 -qscale:v 2 <幀目錄>/f%04d.jpg` 重建)

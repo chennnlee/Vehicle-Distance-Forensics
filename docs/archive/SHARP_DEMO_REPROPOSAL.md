@@ -1,3 +1,9 @@
+> 📦 **歷史文件（2026-07 初，單幀 SHARP+YOLO demo 時期），已過時；現況見 [README.md](../../README.md)。**
+> 本提案「bbox 下半部點雲取 p10 距離」的做法已被「接地點射線×地面平面求交」取代；純量 `--pointcloud-scale`
+> 尺度錨仍沿用，但行車紀錄器的前向距離另需逐機修正，且只縮前向、不動橫向（見 [docs/CASE_PARAMETERS.md](../CASE_PARAMETERS.md)）。
+> `tools/sharp_yolo_distance.py` 仍在版控，§2 是它設計理由的文字紀錄；§2D/§4 的 `tools/sharp_to_bev.py` 已不存在，
+> §6 指令用的範例影格 `data/input/cctv_keyframes/043.jpg` 也已不在，無法原樣重跑。
+
 # SHARP Demo 重新提案
 
 ## 1. 申請書核心目標重述
