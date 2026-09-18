@@ -58,7 +58,7 @@ OSD 時鐘秒跳定時(NVR 串流謊報 fps)→ YOLOv8-seg 接地點 → 平面�
 
 - 2.18 排除了車 2 一段高速連接道(含該段的 34 段為 2.91,兩個數字都列在該 README)。
 - 雷達驗證的是**量法**,不是台灣五支 demo 的係數本身(該台相機需要的修正接近 1.0)。
-- 重跑步驟與各項預期數字見 [REPRODUCE.md](REPRODUCE.md)。
+- 重跑步驟與各項預期數字見 [REPRODUCE.md](REPRODUCE.md);全部驗證(含各案、失敗與已撤回的數字)的總表見 [docs/VALIDATION_STATUS.md](docs/VALIDATION_STATUS.md)。
 
 ## 主要工具
 
@@ -131,6 +131,10 @@ OSD 時鐘秒跳定時(NVR 串流謊報 fps)→ YOLOv8-seg 接地點 → 平面�
 | [REPRODUCE.md](REPRODUCE.md) | 重跑步驟、預期數字、自我檢查 | 現行 |
 | [docs/CASE_PARAMETERS.md](docs/CASE_PARAMETERS.md) | 各案執行參數與距離修正係數 | 現行 |
 | [docs/FAILURE_BOUNDARIES.md](docs/FAILURE_BOUNDARIES.md) | 已知失效邊界 | 現行 |
+| [docs/VALIDATION_STATUS.md](docs/VALIDATION_STATUS.md) | 全部驗證的總表:真值層級、每個數字的族群與出處;文末附前向距離修正的技術證據 | 現行 |
+| [docs/ODOMETER_DESIGN.md](docs/ODOMETER_DESIGN.md) | 虛線週期碼表的設計、已廢棄的機制與試過失敗的做法 | 現行 |
+| [docs/METHODOLOGY_PITFALLS.md](docs/METHODOLOGY_PITFALLS.md) | 方法論上踩過的錯:怎麼發現、以後的規則 | 現行 |
+| [docs/BACKLOG.md](docs/BACKLOG.md) | 單一待辦清單,依負責人分節(含同學 Terry 的部分) | 現行 |
 | `data/output/**/README.md` | 各項成果的方法、數字與重跑指令(入口見上方「驗證摘要」「輸出資料夾」) | 現行 |
 | [tools/report/README.md](tools/report/README.md) | 報告與簡報產生器 | 現行 |
 | [docs/PUBLIC_DATASET_BENCHMARK_PLAN.md](docs/PUBLIC_DATASET_BENCHMARK_PLAN.md) | 2026-08 公開資料集驗證計畫(回應教授四點指示);現況見檔首 | 歷史規劃 |
