@@ -5,10 +5,12 @@
 #
 #   bash tools/run_blind_eval.sh
 #
-# Two passes, both scored later against radar but neither using radar as input:
-#   unf_*     the UNFILTERED pairing set -- no row is dropped using the truth's value
-#   anchor_*  depth read at road points whose distance comes from the lane markings
-#             (Method C geometry), which is what supplies the scale constant k
+# Three passes, all scored later against radar but none using radar as input:
+#   unf_*        the UNFILTERED pairing set -- no row is dropped using the truth's value
+#   anchor_*     depth read at road points whose distance comes from the lane markings
+#                (Method C geometry), which is what supplies the scale constant k
+#   body_pred_*  depth read at each paired car's body centre instead of its ground
+#                contact (docs sections 14 and 19); targets from body_centre_targets.py
 set -u
 cd "$(dirname "$0")/.."
 P=${VDF_PY:-~/venvs/depthbench/bin/python}
@@ -37,6 +39,11 @@ run () {  # $1=prefix $2=targets-prefix
   done
 }
 
-echo "=== pass 1/2: unfiltered pairing set ==="; run unf    targets
-echo "=== pass 2/2: marking-derived road anchors ==="; run anchor roadanchor
+echo "=== pass 1/3: unfiltered pairing set ==="; run unf    targets
+echo "=== pass 2/3: marking-derived road anchors ==="; run anchor roadanchor
+for T in $SEGS; do
+  [ -s "$OUT/body_$T.csv" ] || $P tools/body_centre_targets.py --frames-root "$FR" \
+     --segments "$T" --out-dir "$OUT" 2>&1 | grep -E "rows recovered|^wrote" | sed 's/^/     /'
+done
+echo "=== pass 3/3: body centre ==="; run body_pred body
 echo "BLIND_EVAL_DONE"

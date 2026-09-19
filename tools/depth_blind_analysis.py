@@ -6,7 +6,7 @@ then scored against, which is the median-scaling protocol of the depth literatur
 That measures the relative geometry and says nothing about whether the chain could
 be deployed, because in the field there is no radar to fit against.
 
-This runs the four checks that answer the deployment question instead.  None of
+This runs the checks below, which answer the deployment question instead.  None of
 them uses the radar to calibrate; it is only ever the thing being scored against.
 
   sources   Same predictions, three different calibration sets: road points, the
@@ -28,6 +28,10 @@ them uses the radar to calibrate; it is only ever the thing being scored against
 
   transfer  Calibrate on one segment, score on another recorded on a different day
             with the same camera -- "calibrate the camera once and reuse it".
+
+  marking   The deployable constant taken at the tyre's ground contact (mask's lowest
+            point): raw vs marking vs radar constant, the focal sweep, cross-day reuse,
+            and body centre vs contact as paired differences with a block-bootstrap CI.
 
   methodc   Method C itself against the radar, under both contact-point definitions
             and both mounting offsets, because its accuracy depends on both and
@@ -245,11 +249,114 @@ def cmd_methodc(args):
     print()
 
 
+def _boot_median(diff, block=5, B=4000, seed=0):
+    """95% CI of the median of a paired difference, resampling blocks of consecutive rows
+    (rows are 4 frames apart, so 5 rows = 20 frames, the project's usual block)."""
+    rng = np.random.default_rng(seed)
+    idx = np.arange(len(diff))
+    bl = [idx[i:i + block] for i in range(0, len(idx), block)]
+    bs = [np.median(diff[np.concatenate([bl[j] for j in rng.integers(0, len(bl), len(bl))])])
+          for _ in range(B)]
+    return np.percentile(bs, [2.5, 97.5])
+
+
+def cmd_marking(args):
+    """The deployable scale constant, taken at the tyre's ground contact (2026-09-19).
+
+    k = median(Method C distance at the mask's LOWEST point / model depth at the target
+    pixel).  Method C's formula only holds for road points, and the lowest mask point is
+    where the tyre meets the road; the band-median pixel the models are sampled at sits
+    6-8 px higher on the car body (section 18.2).  The car body and its ground contact are
+    at the same distance, so the model reading at the body pixel is paired with the road
+    distance of the contact row.  No radar value enters k.
+    """
+    if not Path(args.contact_defs).exists():
+        print(f"  找不到 {args.contact_defs}:先跑 tools/contact_point_definitions.py\n")
+        return
+    low = {(r["tag"], r["frame_idx"]): float(r["py_max"]) for r in _rows(Path(args.contact_defs))}
+
+    def rows_for(seg, fname):
+        s = SEGMENTS[seg]
+        keep = {r["frame_idx"] for r in _rows(D / f"paired_{s['tag']}.csv")}
+        rr = [r for r in _rows(D / fname) if r["frame_idx"] in keep and (s["tag"], r["frame_idx"]) in low]
+        fr = [r["frame_idx"] for r in rr]
+        return (fr, np.array([float(r["pred"]) for r in rr]),
+                np.array([float(r["radar_range_m"]) for r in rr]) + DELTA_M,
+                s["A"] / (np.array([low[(s["tag"], f)] for f in fr]) - s["y_h"]),
+                rr[0]["kind"] if rr else "metric")
+
+    print(f"標線常數定在輪胎著地點(遮罩最低點的方法 C 距離);真值 = 雷達 + {DELTA_M} m,近場 < {args.near_m:.0f} m\n")
+    print(f"{'model':<24}{'直接輸出':>16}{'標線常數':>16}{'雷達常數(參考)':>18}")
+    for m in MODELS:
+        cells = []
+        for seg in SEGMENTS:
+            fr, p, g, mc, kind = rows_for(seg, f"unf_{SEGMENTS[seg]['tag']}__{m}.csv")
+            n = g < args.near_m
+            cells.append((_err(p[n], g[n]) if kind == "metric" else float("nan"),
+                          _err(_fit(p[n], mc[n], kind)[0](p[n]), g[n]),
+                          _err(_fit(p[n], g[n], kind)[0](p[n]), g[n])))
+        print(f"{m:<24}" + "".join(f"{a:>8.2f}/{b:<7.2f}" for a, b in zip(*cells)))
+
+    print("\n焦距掃描(seg10):直接輸出隨輸入焦距變,標線常數不變")
+    tag = SEGMENTS["seg10"]["tag"]
+    for m, fxs in (("metric3d_v2", (650, 910, 926, 1200)), ("da3_metric", (650, 926, 1200))):
+        for fx in fxs:
+            fname = f"unf_{tag}__{m}.csv" if fx == 926 else f"fx{fx}_{tag}__{m}.csv"
+            if not (D / fname).exists():
+                continue
+            fr, p, g, mc, kind = rows_for("seg10", fname)
+            n = g < args.near_m
+            print(f"  {m:<14} fx {fx:>5}  直接輸出 {_err(p[n], g[n]):6.2f}%   "
+                  f"標線常數 {_err(_fit(p[n], mc[n], kind)[0](p[n]), g[n]):5.2f}%")
+
+    print("\n跨日沿用:一段定 k,搬到另一段評分")
+    for m in ("metric3d_v2", "unidepth_v2", "da3_metric", "depth_pro"):
+        ks, data = {}, {}
+        for seg in SEGMENTS:
+            fr, p, g, mc, kind = rows_for(seg, f"unf_{SEGMENTS[seg]['tag']}__{m}.csv")
+            n = g < args.near_m
+            ks[seg] = _med(mc[n] / p[n])
+            data[seg] = (p[n], g[n])
+        a, b = list(SEGMENTS)
+        print(f"  {m:<14} k {ks[a]:.3f} / {ks[b]:.3f}  漂移 {(ks[b] / ks[a] - 1) * 100:+.1f}%   "
+              f"{b}用{a}的k {_err(data[b][0] * ks[a], data[b][1]):.2f}%   {a}用{b}的k {_err(data[a][0] * ks[b], data[a][1]):.2f}%")
+
+    print("\n車身中心 vs 輪胎著地點(同一個標線常數);差 = 逐幀(車身誤差 − 著地點誤差)的中位數,兩段合併;"
+          "|差| = 逐幀差的絕對值中位數")
+    print(f"{'方法':<24}{'著地點':>16}{'車身中心':>18}{'差(百分點)':>12}{'95% CI':>20}{'|差|':>9}")
+    for m in ["method_c"] + MODELS:
+        per, diffs = [], []
+        for seg, s in SEGMENTS.items():
+            src = MODELS[0] if m == "method_c" else m
+            fr, p, g, mc, kind = rows_for(seg, f"unf_{s['tag']}__{src}.csv")
+            body = {r["frame_idx"]: r for r in _rows(D / f"body_pred_{s['tag']}__{src}.csv")}
+            ok = np.array([f in body for f in fr])
+            fr = [f for f, o in zip(fr, ok) if o]
+            p, g, mc = p[ok], g[ok], mc[ok]
+            n = g < args.near_m
+            if m == "method_c":
+                pc = mc
+                pb = s["A"] / (np.array([float(body[f]["py"]) for f in fr]) - s["y_h"])
+            else:
+                pbody = np.array([float(body[f]["pred"]) for f in fr])
+                fn = _fit(p[n], mc[n], kind)[0]
+                pc, pb = fn(p), fn(pbody)
+            ec, eb = np.abs(pc - g) / g * 100, np.abs(pb - g) / g * 100
+            per.append((_med(ec[n]), _med(eb[n])))
+            diffs.append((eb - ec)[n])
+        dd = np.concatenate(diffs)
+        lo, hi = _boot_median(dd)
+        print(f"{m:<24}{per[0][0]:>8.2f}/{per[1][0]:<7.2f}{per[0][1]:>9.2f}/{per[1][1]:<8.2f}"
+              f"{_med(dd):>+11.2f}   [{lo:+.2f}, {hi:+.2f}]{_med(np.abs(dd)):>9.2f}")
+    print()
+
+
 def main():
     global DELTA_M
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("check", nargs="?", choices=["sources", "samerow", "holdout", "transfer", "methodc"])
+    ap.add_argument("check", nargs="?",
+                    choices=["sources", "samerow", "holdout", "transfer", "methodc", "marking"])
     ap.add_argument("--all", action="store_true")
     ap.add_argument("--near-m", type=float, default=32.0)
     ap.add_argument("--delta-m", type=float, default=DELTA_M,
@@ -259,9 +366,10 @@ def main():
                     help="CSV from tools/contact_point_definitions.py, used by samerow")
     args = ap.parse_args()
     DELTA_M = args.delta_m
-    checks = [cmd_methodc, cmd_sources, cmd_samerow, cmd_holdout, cmd_transfer] if args.all or not args.check \
+    checks = [cmd_methodc, cmd_marking, cmd_sources, cmd_samerow, cmd_holdout, cmd_transfer] \
+        if args.all or not args.check \
         else [dict(sources=cmd_sources, samerow=cmd_samerow, holdout=cmd_holdout,
-                   transfer=cmd_transfer, methodc=cmd_methodc)[args.check]]
+                   transfer=cmd_transfer, methodc=cmd_methodc, marking=cmd_marking)[args.check]]
     for fn in checks:
         fn(args)
     return 0
