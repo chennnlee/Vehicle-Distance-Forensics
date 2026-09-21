@@ -12,6 +12,13 @@ Per log:
   1. `lane_line_fit.py`     the two ego-lane lines and their vanishing point -> y_h.
                             Its residual also tells us the imagery really is rectified
                             (a few px; a distorted image gives tens).
+  1b. a width check that needs no calibration.  A lane's width in metres is
+                            `dpx * h / (py - y_h)`, so `dpx / (py - y_h)` is the width in
+                            units of the camera's own height.  No camera sits outside
+                            1.1-1.8 m and no lane is outside 2.5-4.5 m, so a ratio beyond
+                            that band means the two "lane lines" are not a lane.  On KITTI
+                            this rejects two drives whose fits implied lanes 7 and 9 m
+                            wide, before spending any time reading their frames.
   2. `vanishing_point_range_calib.py`   A = h*f from the time dashes take to travel
                             between image rows, with the legal cycle as the only scale.
   3. gates, then compare A against h*fy from the calibration files.
@@ -94,6 +101,8 @@ def main():
     ap.add_argument("--step", type=int, default=2)
     ap.add_argument("--max-resid-px", type=float, default=3.0)
     ap.add_argument("--min-inliers", type=int, default=15)
+    ap.add_argument("--lane-ratio-range", default="1.39,3.64",
+                    help="allowed lane width / camera height: 2.5 m lane at h=1.8 up to 4.5 m at h=1.1")
     ap.add_argument("--cycle-set", default="12.19,14.63",
                     help="legal dash cycles the implied cycle may snap to. "
                          "12.19 = MUTCD 10+30 ft, 14.63 = 12+36 ft (Caltrans). Taiwan would be 10.0")
@@ -127,6 +136,15 @@ def main():
         if max(lf["resid"] or [99]) > args.max_resid_px or min(lf["left"][2], lf["right"][2]) < args.min_inliers:
             r.update(status="lane fit weak"); results.append(r)
             print(f"{log[:8]}  ✗ lane fit weak (resid {lf['resid']}, n {lf['left'][2]}/{lf['right'][2]})")
+            continue
+        row = max(int(x) for x in args.rows.split(","))
+        ratio = ((lf["right"][0] * row + lf["right"][1]) - (lf["left"][0] * row + lf["left"][1])) / (row - lf["y_h"])
+        lo, hi = (float(x) for x in args.lane_ratio_range.split(","))
+        r["lane_width_over_height"] = ratio
+        if not lo <= ratio <= hi:
+            r.update(status="not a lane"); results.append(r)
+            print(f"{log[:8]}  ✗ fitted pair is not a lane: width/height {ratio:.2f} "
+                  f"(a 1.1-1.8 m camera would make it {ratio * 1.1:.1f}-{ratio * 1.8:.1f} m wide)")
             continue
 
         cal = measure_A(root / "pinhole", meta["fps"], lf["y_h"], [lf["left"], lf["right"]],
