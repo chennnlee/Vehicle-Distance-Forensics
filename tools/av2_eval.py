@@ -12,8 +12,13 @@ What is compared, on the same rows:
   method C      d = A_marking / (py_max - y_h), the road distance at the tyre contact.
                 No model, no learning.
   raw depth     what the depth model prints in metres at the body pixel.
-  marking k     that reading times k = median(method C distance / model reading).  The
-                constant a deployed system can actually get.
+  marking k     that reading times k = median(method C distance / model reading), taken
+                over the scored rows.  Its values never touch the truth, but its rows were
+                selected by it twice -- only targets a cuboid matched, and only those the
+                truth put inside --near-m.
+  blind k       the same constant with the truth nowhere in it: every target the detector
+                produced, near field decided by method C's own distance.  This is the one
+                a deployed system can actually get, and the one to quote.
   oracle k      the same with k fitted to the cuboids.  Not deployable; it is the floor
                 that says how much of the error is scale and how much is geometry.
 
@@ -202,23 +207,34 @@ def main():
                y_h=y_h, cy=meta["cy"], near_m=args.near_m,
                gt_range=[float(R.gt_m.min()), float(R.gt_m.max())],
                method_c_err_pct=rel_err(R.method_c[near], R.gt_m[near]),
+               method_c_err_pct_blindnear=rel_err(R.method_c[R.method_c < args.near_m],
+                                                  R.gt_m[R.method_c < args.near_m]),
                models={})
     print(f"\n{log.name}   {len(R)} matched targets ({int(near.sum())} nearer than {args.near_m:g} m), "
           f"gt {R.gt_m.min():.1f}-{R.gt_m.max():.1f} m")
     print(f"  A marking {A:.0f} vs factory {meta['A_factory']:.0f}  ({A / meta['A_factory'] * 100 - 100:+.1f}%)")
-    print(f"  method C (markings only)            {res['method_c_err_pct']:6.2f}%")
-    for m in by_model:
+    print(f"  method C (markings only)            {res['method_c_err_pct']:6.2f}%   "
+          f"(near field by its own distance: {res['method_c_err_pct_blindnear']:.2f}%)")
+    for m, d in by_model.items():
         v = R[m].values.astype(float)
         ok = np.isfinite(v) & near.values
         k_mark = med(R.method_c.values[ok] / v[ok])
         k_orac = med(R.gt_m.values[ok] / v[ok])
-        e = dict(n=int(ok.sum()), k_marking=k_mark, k_oracle=k_orac,
+        # The constant with no truth in it at all, fitted on the prediction file itself.
+        mc_all = A / (d.py_max.values.astype(float) - y_h)
+        pv = d.pred.values.astype(float)
+        sel = np.isfinite(pv) & (pv > 0) & (mc_all < args.near_m)
+        k_blind = med(mc_all[sel] / pv[sel])
+        e = dict(n=int(ok.sum()), n_blind=int(sel.sum()),
+                 k_marking=k_mark, k_blind=k_blind, k_oracle=k_orac,
                  raw_pct=rel_err(v[ok], R.gt_m.values[ok]),
                  marking_pct=rel_err(v[ok] * k_mark, R.gt_m.values[ok]),
+                 blind_pct=rel_err(v[ok] * k_blind, R.gt_m.values[ok]),
                  oracle_pct=rel_err(v[ok] * k_orac, R.gt_m.values[ok]))
         res["models"][m] = e
-        print(f"  {m:<24} raw {e['raw_pct']:6.2f}%   x k_marking {e['marking_pct']:6.2f}%   "
-              f"x k_oracle {e['oracle_pct']:6.2f}%   (k {k_mark:.3f} vs {k_orac:.3f})")
+        print(f"  {m:<24} raw {e['raw_pct']:6.2f}%   x k_blind {e['blind_pct']:6.2f}%   "
+              f"x k_marking {e['marking_pct']:6.2f}%   x k_oracle {e['oracle_pct']:6.2f}%   "
+              f"(k {k_blind:.3f} / {k_mark:.3f} / {k_orac:.3f})")
 
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(json.dumps(res, indent=2))
