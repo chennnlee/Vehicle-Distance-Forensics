@@ -339,7 +339,38 @@ KITTI 是**真正不同的相機**(PointGrey Flea2,1242×375,f = 721 px,對 AV2 
 
 ---
 
-## 8. 重現指令
+## 8. 新 session / 換一台電腦要怎麼接手
+
+**自動接得到的**(不必做任何事):`CLAUDE.md`(每個 session 自動載入,裡面指向本檔)、
+版控中的 `tools/`、`docs/`、所有 commit。
+
+**不在 git 裡、但重跑得回來的**(`data/` 被 gitignore):
+
+| 東西 | 大小 | 怎麼還原 |
+|---|---|---|
+| AV2 影像 + 校正 + 位姿 + 地面圖層 | 2.5 GB | `python3 tools/av2_fetch.py tools/av2_val_logs.txt` |
+| AV2 位姿(篩選用) | 25 MB | `python3 tools/av2_select.py --out-list /tmp/x.txt`(會自動下載並重現同一份 16 支清單) |
+| KITTI 三支 drive | 4 GB | `bash tools/kitti_fetch.sh`(本機沒有 `unzip`,用 python `zipfile` 解) |
+| hs005 影格 | 536 張 | `ffmpeg -i "<海盛 005 原片>" -vsync 0 -qscale:v 2 data/input/_frames_cache/hs005/f%05d.jpg` |
+| benchmark 中間輸出 | — | 見下方重現指令;深度模型那步用 `bash tools/run_av2_depth.sh <log id>`(可續跑) |
+| 深度模型權重 / venv | 6 GB | `docs/DEPTH_MODEL_BENCHMARK.md` §2.1 |
+
+⚠ **真值檔 `data/input/av2/<log>/annotations.feather` 要重跑盲測前必須刪掉**,
+否則 `seal_predictions.py` 會拒絕封存(這是刻意的)。
+
+**完全不會保留的**:對話本身、`/tmp/claude-1000/...` 暫存區。
+接回上一次對話用 `claude --continue`(同一個資料夾);換視窗或換機器則靠 `CLAUDE.md` + 本檔。
+
+**跨機器**:先 `git push`,另一台 `git clone` 後照上表重建 `data/`。
+個人筆記若不想進共用 repo,放 `CLAUDE.local.md`(加進 `.gitignore`,每台機器各自一份)。
+
+**長時間工作要跨 session 存活**:用 `nohup <指令> > <repo 內的 log 檔> 2>&1 &`,
+log 寫在 repo 裡(不要寫 `/tmp`),新 session 才讀得到進度。
+⚠ Windows 進入睡眠時 WSL 會整個凍結、網路中斷;要避免請先 `powercfg /change standby-timeout-ac 0`。
+
+---
+
+## 9. 重現指令
 
 ```bash
 P=~/venvs/depthbench/bin/python
