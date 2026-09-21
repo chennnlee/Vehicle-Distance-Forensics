@@ -20,9 +20,18 @@ The cycle gate is the one this batch added.  A line's own pair-to-pair spread do
 notice a wrong period: on the Miami log the right-hand line locked onto a 6.94-frame
 rhythm (kerb seams, not paint) with a tidy 4.5% spread, and pooling it pulled A from 1547
 to 1562.  Ego speed from the poses converts the locked period into the cycle length it
-implies (v * period / fps); paint that is not a 12.19 m cycle is thrown out.  This is the
-rule CLAUDE.md already states for Taiwan ("週期勿信規範先驗 ... 有 GPS 就先反驗"), applied
-where a speed reference exists.
+implies (v * period / fps).  This is the rule CLAUDE.md already states for Taiwan
+("週期勿信規範先驗 ... 有 GPS 就先反驗"), applied where a speed reference exists.
+
+⚠ The first version of that gate asked only whether the implied cycle was within +-20% of
+one assumed constant, and that was too loose in both directions.  Log f668074d implied
+14.50 m, passed, and came out 23% low -- because that road is not striped to the MUTCD
+default of 12.19 m but to something near the Californian 48 ft (14.63 m).  The gate now
+snaps the implied cycle to the nearest entry of `--cycle-set` and rejects anything further
+than `--cycle-tol` from all of them; the matched entry, not the assumed one, is what A is
+computed from.  Tightening it was decided after seeing that failure, so it is a post-hoc
+fix: it turns f668074d's -23.2% into -7.9% and leaves the other three logs unchanged.  It
+needs a speed reference, so it does not transfer to clips without GPS.
 
 Usage:
   python3 tools/av2_marking_calib.py --logs-file <file with one log id per line> \
@@ -59,8 +68,10 @@ def lane_lines(frames_dir, rows, band, step):
                 y_h=float(v[1]), x_vp=float(v[2]), resid=resid)
 
 
-def measure_A(frames_dir, fps, y_h, lines, rows, out_json):
+def measure_A(frames_dir, fps, y_h, lines, rows, out_json, reuse=False):
     Path(out_json).parent.mkdir(parents=True, exist_ok=True)
+    if reuse and Path(out_json).exists():
+        return json.loads(Path(out_json).read_text())
     cmd = [PY, str(ROOT / "tools/vanishing_point_range_calib.py"), "--frames-dir", str(frames_dir),
            "--fps", str(fps), "--y-h", str(y_h), "--cycle-m", str(CYCLE_M), "--rows", rows,
            "--out-json", str(out_json), "--max-spread", "0.10"]
@@ -83,8 +94,13 @@ def main():
     ap.add_argument("--step", type=int, default=2)
     ap.add_argument("--max-resid-px", type=float, default=3.0)
     ap.add_argument("--min-inliers", type=int, default=15)
-    ap.add_argument("--cycle-tol", type=float, default=0.20,
-                    help="reject a line whose locked period implies a cycle this far from legal")
+    ap.add_argument("--cycle-set", default="12.19,14.63",
+                    help="legal dash cycles the implied cycle may snap to. "
+                         "12.19 = MUTCD 10+30 ft, 14.63 = 12+36 ft (Caltrans). Taiwan would be 10.0")
+    ap.add_argument("--cycle-tol", type=float, default=0.08,
+                    help="reject a line whose implied cycle is this far from every entry of --cycle-set")
+    ap.add_argument("--reuse-json", action="store_true",
+                    help="reuse an existing A_<log>.json instead of re-reading the frames")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
@@ -114,37 +130,42 @@ def main():
             continue
 
         cal = measure_A(root / "pinhole", meta["fps"], lf["y_h"], [lf["left"], lf["right"]],
-                        args.rows, Path(args.out).parent / f"A_{log[:8]}.json")
+                        args.rows, Path(args.out).parent / f"A_{log[:8]}.json", args.reuse_json)
         if cal is None:
             r.update(status="no line passed (tool gate)"); results.append(r)
             print(f"{log[:8]}  ✗ no line passed the tool's own spread gate"); continue
 
+        cycles = [float(x) for x in args.cycle_set.split(",")]
         kept, lines_out = [], []
         for line in cal["lines"]:
             p = line.get("period_frames")
             implied = meta["speed_mps_median"] * p / meta["fps"] if p else None
-            ok_cycle = implied is not None and abs(implied - CYCLE_M) / CYCLE_M <= args.cycle_tol
+            matched = min(cycles, key=lambda c: abs(implied - c)) if implied else None
+            ok_cycle = matched is not None and abs(implied - matched) / matched <= args.cycle_tol
             take = bool(line.get("accepted")) and ok_cycle and len(line.get("pairs", [])) >= 3
             lines_out.append(dict(line=line["line"], period=p, implied_cycle_m=implied,
+                                  matched_cycle_m=matched if ok_cycle else None,
                                   spread=line.get("spread"), n_pairs=len(line.get("pairs", [])),
                                   accepted=take))
             if take:
-                kept += [e["A"] for e in line["pairs"]]
+                # A was computed with CYCLE_M; rescale to the cycle this road is actually striped to
+                kept += [e["A"] * matched / CYCLE_M for e in line["pairs"]]
         r["lines"] = lines_out
         if not kept:
             r.update(status="no line passed"); results.append(r)
             print(f"{log[:8]}  ✗ no line passed  " +
-                  "  ".join(f"[period {l['period']} -> cycle "
-                            f"{l['implied_cycle_m']:.1f} m]" if l["period"] else "[no lock]" for l in lines_out))
+                  "  ".join(f"[period {l['period']:.2f} -> implies {l['implied_cycle_m']:.1f} m]"
+                            if l["period"] else "[no lock]" for l in lines_out))
             continue
         A = float(np.median(kept))
+        r["cycles_used_m"] = sorted({l["matched_cycle_m"] for l in lines_out if l["accepted"]})
         r.update(status="ok", A_marking=A, n_pairs=len(kept),
                  spread=float((max(kept) - min(kept)) / A), ratio=A / meta["A_factory"])
         results.append(r)
         print(f"{log[:8]}  A {A:6.0f}  factory {meta['A_factory']:6.0f}  "
               f"ratio {r['ratio']:.3f}  ({r['ratio'] * 100 - 100:+.1f}%)  "
               f"pairs {len(kept)}  spread {r['spread'] * 100:.1f}%  "
-              f"pitch {r['pitch_px']:+.1f} px")
+              f"pitch {r['pitch_px']:+.1f} px  cycle {r['cycles_used_m']}")
 
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(json.dumps(results, indent=2))
