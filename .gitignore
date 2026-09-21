@@ -93,3 +93,7 @@ depth_models/
 
 # Decoded frame caches (rebuildable from the source clips)
 data/input/_frames_cache/
+
+# Local material that is not part of the repo (added 2026-09-21)
+data/input_old_20260917/
+研究計畫摘要表(C802).pdf
