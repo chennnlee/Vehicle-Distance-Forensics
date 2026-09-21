@@ -285,17 +285,40 @@ def cmd_marking(args):
                 s["A"] / (np.array([low[(s["tag"], f)] for f in fr]) - s["y_h"]),
                 rr[0]["kind"] if rr else "metric")
 
-    print(f"標線常數定在輪胎著地點(遮罩最低點的方法 C 距離);真值 = 雷達 + {DELTA_M} m,近場 < {args.near_m:.0f} m\n")
-    print(f"{'model':<24}{'直接輸出':>16}{'標線常數':>16}{'雷達常數(參考)':>18}")
+    def rows_unselected(seg, fname):
+        """Every detected target, with no row dropped using a radar value.
+
+        The column above fits k on the rows it is then scored on, and those rows were
+        picked by the radar twice: `paired_*` keeps only pairings that agreed with the
+        radar geometrically, and the near-field cut uses the radar's own distance.  The
+        VALUES in k are radar-free either way, but the SELECTION is not, and that is what
+        a reader objects to.  Here the near field is decided by Method C's own distance,
+        so no radar number touches the constant at any point.
+        """
+        s = SEGMENTS[seg]
+        rr = [r for r in _rows(D / fname) if (s["tag"], r["frame_idx"]) in low]
+        mc = s["A"] / (np.array([low[(s["tag"], r["frame_idx"])] for r in rr]) - s["y_h"])
+        return np.array([float(r["pred"]) for r in rr]), mc, (rr[0]["kind"] if rr else "metric")
+
+    print(f"標線常數定在輪胎著地點(遮罩最低點的方法 C 距離);真值 = 雷達 + {DELTA_M} m,近場 < {args.near_m:.0f} m")
+    print("「標線常數」的 k 擬在被評分的那些列上,而那些列是雷達選的;「無選樣」改成所有偵測到的")
+    print("目標、近場由方法 C 自己的距離決定,雷達完全不參與。兩者都在同一批列上評分。\n")
+    print(f"{'model':<24}{'直接輸出':>16}{'標線常數':>16}{'標線常數(無選樣)':>20}{'雷達常數(參考)':>18}")
     for m in MODELS:
         cells = []
         for seg in SEGMENTS:
             fr, p, g, mc, kind = rows_for(seg, f"unf_{SEGMENTS[seg]['tag']}__{m}.csv")
             n = g < args.near_m
+            pu, mcu, _ = rows_unselected(seg, f"unf_{SEGMENTS[seg]['tag']}__{m}.csv")
+            nu = np.isfinite(pu) & (pu > 0) & (mcu < args.near_m)
+            blind = _fit(pu[nu], mcu[nu], kind)[0]
             cells.append((_err(p[n], g[n]) if kind == "metric" else float("nan"),
                           _err(_fit(p[n], mc[n], kind)[0](p[n]), g[n]),
+                          _err(blind(p[n]), g[n]),
                           _err(_fit(p[n], g[n], kind)[0](p[n]), g[n])))
-        print(f"{m:<24}" + "".join(f"{a:>8.2f}/{b:<7.2f}" for a, b in zip(*cells)))
+        a, b = cells
+        print(f"{m:<24}" + "".join(f"{x:>8.2f}/{y:<7.2f}" if i != 2 else f"{x:>10.2f}/{y:<9.2f}"
+                                   for i, (x, y) in enumerate(zip(a, b))))
 
     print("\n焦距掃描(seg10):直接輸出隨輸入焦距變,標線常數不變")
     tag = SEGMENTS["seg10"]["tag"]
