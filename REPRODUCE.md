@@ -135,8 +135,10 @@ python3 tools/comma2k19_radar_eval.py --ranges <out>/ranges.csv --radar <out>/ra
 - **重跑既有輸出**:同一個點雲 + 同一個 `hood-y`,平面擬合是**確定性的**——
   平面係數應該逐位元相同。不同就是參數對不上,
   可用 `tools/solve_archived_hood.py` 從 `tracks.json` 反解出實際用過的 `hood-y`。
-- **換偵測器不該改變量測**:對雷達的受控比較顯示目標速度差 +0.03 km/h(區間含 0),
-  85% 的幀接地點落在完全相同的像素列(`data/output/detector_vs_radar/README.md`)。
+- **換偵測器對速度不該有可分辨的改變**:對雷達的受控比較顯示目標速度配對差中位
+  +0.03 km/h(區塊自助區間 −0.68~+0.78,含 0),85% 的幀接地點落在完全相同的像素列。
+  ⚠ **距離不是不變量**:同一次比較的近場距離由 7.49% 降到 5.77%,區間 −0.68~−0.20
+  **不含 0**(`data/output/detector_vs_radar/README.md`)。
 
 ## 不能重現的部分
 
