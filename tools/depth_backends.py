@@ -175,7 +175,7 @@ class DepthPro(Backend):
 class DA3Metric(Backend):
     name = "da3_metric"
     kind = "metric"
-    paper = "Depth Anything 3, ICLR 2026 (DA3METRIC-LARGE; weights are CC BY-NC 4.0)"
+    paper = "Depth Anything 3, ICLR 2026 (DA3METRIC-LARGE; Apache 2.0, commercial OK)"
 
     def __init__(self, repo_id: str = "depth-anything/DA3METRIC-LARGE"):
         self.repo_id = repo_id
