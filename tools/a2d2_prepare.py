@@ -79,7 +79,7 @@ def ego_speed(drive: Path):
                 ts.append(float(t)); v.append(float(val) / 3.6 if kmh else float(val))
     if not ts:
         return None, None
-    ts, v = np.array(ts), np.array(v)
+    ts, v = np.array(ts) / 1e6, np.array(v)      # bus timestamps are microseconds
     o = np.argsort(ts)
     return (ts[o], v[o]), float(np.median(v))
 
@@ -122,6 +122,17 @@ def main():
         cv2.imwrite(str(dst), im, [cv2.IMWRITE_JPEG_QUALITY, args.quality])
 
     spd, v_med = ego_speed(drive)
+    # The drive's median is not this window's median: a 947-frame slice of a 526 s drive can
+    # be a 65 km/h country road inside a drive whose median is 28 km/h city. The cycle gate
+    # needs the window, so take the bus signal over the span the extracted frames cover
+    # (absolute frame index / fps after the drive's first sample).
+    if spd is not None:
+        idx = [int(q.stem.split("_")[-1]) for q in src]
+        t0 = spd[0][0]
+        lo, hi = t0 + min(idx) / FPS, t0 + max(idx) / FPS
+        m = (spd[0] >= lo) & (spd[0] <= hi)
+        if m.sum() >= 10:
+            v_med = float(np.median(spd[1][m]))
     meta = dict(
         dataset="a2d2", drive=drive.name, camera=CAM, frames=len(src), fps=FPS, scale=1.0,
         width=W, height=H,

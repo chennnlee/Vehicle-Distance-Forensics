@@ -101,22 +101,32 @@ for n, m, k, res in lines:
     uniq.append((n, m, k, res))
     if len(uniq) >= 6:
         break
-print(f"\n{'n':>4s} {'slope':>7s} {'x@620':>7s} {'x@500':>7s} {'resid':>6s}")
+_rb = max(int(v) for v in out_rows.split(","))
+_rt = min(int(v) for v in out_rows.split(","))
+print(f"\n{'n':>4s} {'slope':>7s} {'x@'+str(_rb):>7s} {'x@'+str(_rt):>7s} {'resid':>6s}")
 for n, m, k, res in uniq:
-    print(f"{n:4d} {m:7.3f} {m*620+k:7.1f} {m*500+k:7.1f} {res:6.2f}")
+    print(f"{n:4d} {m:7.3f} {m*_rb+k:7.1f} {m*_rt+k:7.1f} {res:6.2f}")
 
 # Choose the pair whose midpoint at the bottom row sits closest to the principal
 # column. "Nearest line either side of centre" is the obvious rule and it is wrong:
 # a tyre-polish streak inboard of the paint wins it, and on seg21 that shifted the
 # vanishing point by 15 px. A windscreen camera sits near the middle of its lane,
 # so the midpoint is the criterion with physics behind it.
+# The row this is judged at must be BELOW the horizon, or left and right swap: a line's
+# column crosses to the other side of the vanishing point above it. Row 620 was hard-coded
+# for AV2's 1024-tall frames, where it sits ~110 px under a horizon at 512. On A2D2's
+# 1208-tall frames the horizon is at 684, so 620 is ABOVE it and every candidate lands on
+# the wrong side -- the fit then reports "could not bracket the ego lane" on imagery that is
+# perfectly good. Judge at the lowest row being emitted instead, which is below the horizon
+# by construction on any camera.
 cxb = W / 2
-left = [l for l in uniq if l[1]*620 + l[2] < cxb and l[1] < 0]
-right = [l for l in uniq if l[1]*620 + l[2] > cxb and l[1] > 0]
+row_b = max(int(v) for v in out_rows.split(","))
+left = [l for l in uniq if l[1]*row_b + l[2] < cxb and l[1] < 0]
+right = [l for l in uniq if l[1]*row_b + l[2] > cxb and l[1] > 0]
 if not (left and right):
-    raise SystemExit("could not bracket the ego lane")
+    raise SystemExit(f"could not bracket the ego lane (judged at row {row_b})")
 L, R = min(((a, b) for a in left for b in right),
-           key=lambda ab: abs(0.5 * ((ab[0][1]*620 + ab[0][2]) + (ab[1][1]*620 + ab[1][2])) - cxb))
+           key=lambda ab: abs(0.5 * ((ab[0][1]*row_b + ab[0][2]) + (ab[1][1]*row_b + ab[1][2])) - cxb))
 vy = (R[2] - L[2]) / (L[1] - R[1])
 print(f"\nego lane: left x = {L[1]:.4f}y + {L[2]:.1f} (n={L[0]}), "
       f"right x = {R[1]:.4f}y + {R[2]:.1f} (n={R[0]})")
