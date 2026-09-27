@@ -126,7 +126,7 @@ def main():
             print(f"{log[:8]}  ✗ prepare failed"); continue
         meta = json.loads(meta_p.read_text())
         r = dict(log=log, A_factory=meta["A_factory"], cy=meta["cy"], fps=meta["fps"],
-                 v_mps=meta["speed_mps_median"], cam_h=meta["cam_height_m"])
+                 v_mps=meta["speed_mps_median"], cam_h=meta.get("cam_height_m"))
 
         lf = lane_lines(root / "pinhole", args.rows, args.band, args.step)
         if lf is None:
@@ -177,17 +177,23 @@ def main():
             continue
         A = float(np.median(kept))
         r["cycles_used_m"] = sorted({l["matched_cycle_m"] for l in lines_out if l["accepted"]})
+        # A_factory is None when the log was prepared with --hide-factory: the value being
+        # recovered is then not on screen while the batch runs, and the comparison is a
+        # separate step afterwards. Datasets that publish it in the meta are unaffected.
+        fa = meta["A_factory"]
         r.update(status="ok", A_marking=A, n_pairs=len(kept),
-                 spread=float((max(kept) - min(kept)) / A), ratio=A / meta["A_factory"])
+                 spread=float((max(kept) - min(kept)) / A),
+                 ratio=(A / fa) if fa else None)
         results.append(r)
-        print(f"{log[:8]}  A {A:6.0f}  factory {meta['A_factory']:6.0f}  "
-              f"ratio {r['ratio']:.3f}  ({r['ratio'] * 100 - 100:+.1f}%)  "
+        score = (f"factory {fa:6.0f}  ratio {r['ratio']:.3f}  ({r['ratio'] * 100 - 100:+.1f}%)  "
+                 if fa else "factory withheld                  ")
+        print(f"{log[:8]}  A {A:6.0f}  {score}"
               f"pairs {len(kept)}  spread {r['spread'] * 100:.1f}%  "
               f"pitch {r['pitch_px']:+.1f} px  cycle {r['cycles_used_m']}")
 
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(json.dumps(results, indent=2))
-    ok = [r for r in results if r.get("status") == "ok"]
+    ok = [r for r in results if r.get("status") == "ok" and r.get("ratio")]
     print(f"\n{len(ok)}/{len(results)} logs produced an answer")
     if ok:
         rr = np.array([r["ratio"] for r in ok])

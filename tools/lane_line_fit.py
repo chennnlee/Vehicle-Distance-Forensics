@@ -94,9 +94,23 @@ for _ in range(6000):
     mm, kk = np.polyfit(P[inl, 0], P[inl, 1], 1)
     lines.append((int(inl.sum()), float(mm), float(kk), float(np.abs(mm*P[inl,0]+kk-P[inl,1]).mean())))
 lines.sort(key=lambda t: -t[0])
+# De-duplicating candidate lines needs a row just BELOW the horizon, and it has to move with
+# the sensor. Above the horizon every candidate converges on the vanishing point, so distinct
+# lines read as duplicates and all but one are dropped; far below it, near-copies of one line
+# (the two edges of a stripe, or a stripe and the tyre polish beside it) separate by more than
+# the tolerance and fill the shortlist, crowding out the real partner. Row 620 with a 25 px
+# tolerance was hard-coded for AV2's 1024-tall frames, whose horizon is at ~512. On AV1's
+# 1200-tall frames the horizon is at ~604, so 620 sits 16 px ABOVE it and every line but one
+# was being discarded -- the same defect the left/right test had on A2D2, in the other place
+# it was written. Judging at the lowest emitted row instead is safely below the horizon but
+# far too generous: on AV2 it changed the chosen pair in half the logs and cost one of the
+# four that pass. So keep the geometry AV2 was tuned on and write it as a fraction of frame
+# height, which is provably a no-op there -- on 1024-tall frames it is row 620 and 25 px
+# again, to the pixel -- while moving with the sensor everywhere else.
+row_d, tol_d = 620.0 * H / 1024.0, 25.0 * H / 1024.0
 uniq = []
 for n, m, k, res in lines:
-    if any(abs(m*620+k - (mm*620+kk)) < 25 for _, mm, kk, _ in uniq):
+    if any(abs(m*row_d+k - (mm*row_d+kk)) < tol_d for _, mm, kk, _ in uniq):
         continue
     uniq.append((n, m, k, res))
     if len(uniq) >= 6:
