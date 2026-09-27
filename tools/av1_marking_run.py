@@ -51,12 +51,14 @@ def run(cmd, quiet=False):
     return r
 
 
-def calib(logs, root, rows, band, out, cycle_set, extra=()):
+def calib(logs, root, rows, band, out, cycle_set, dedup_row, dedup_px, side_row, extra=()):
     lf = Path(out).parent / "_logs.txt"
     lf.parent.mkdir(parents=True, exist_ok=True)
     lf.write_text("\n".join(logs) + "\n")
     run([PY, ROOT / "tools/av2_marking_calib.py", "--logs-file", lf, "--av2-root", root,
-         "--rows", rows, "--band", band, "--cycle-set", cycle_set, "--out", out, *extra])
+         "--rows", rows, "--band", band, "--cycle-set", cycle_set,
+         "--dedup-row", dedup_row, "--dedup-px", dedup_px, "--side-row", side_row,
+         "--out", out, *extra])
     return {r["log"]: r for r in json.loads(Path(out).read_text())} if Path(out).exists() else {}
 
 
@@ -71,6 +73,19 @@ def main():
                          "1200-tall frame, the fractions AV2's row set corresponds to")
     ap.add_argument("--band", default="700,1100", help="ridge band for the lane fit, fixed across "
                                                        "both passes so the horizon cannot move")
+    # lane_line_fit defaults to row 620 for both of its judging rows, which is where this
+    # camera's horizon is (604-627 across the val logs). Leaving them at the default is the
+    # very defect this round set out to fix: candidate lines converge at the horizon, so they
+    # de-duplicate into one and the left/right test lands on the wrong side. Passing them is
+    # not optional on AV1 -- the first overnight run forgot to, and three logs came back
+    # "not a lane" while a fourth moved its A by 12%.
+    ap.add_argument("--dedup-row", type=float, default=727.0,
+                    help="~110 px below AV1's horizon, the same offset AV2's 620 has from its own")
+    ap.add_argument("--dedup-px", type=float, default=29.0,
+                    help="25 px scaled by frame height (1200/1024): the same real separation "
+                         "subtends more pixels on a taller sensor")
+    ap.add_argument("--side-row", type=float, default=1008.0,
+                    help="lowest seed row; below the horizon by a wide margin on this camera")
     ap.add_argument("--dash-m", type=float, default=3.05, help="painted dash, MUTCD 10 ft")
     ap.add_argument("--cycle-set", default="12.19,14.63")
     ap.add_argument("--skip-prepare", action="store_true")
@@ -96,7 +111,8 @@ def main():
 
     print("\n=== pass 1: seed rows (no scale used anywhere) ===", flush=True)
     seed = calib(logs, args.root, args.seed_rows, args.band,
-                 out.parent / "calib_seed.json", args.cycle_set)
+                 out.parent / "calib_seed.json", args.cycle_set,
+                 args.dedup_row, args.dedup_px, args.side_row)
 
     print("\n=== pass 2: far row from the measured A, per log ===", flush=True)
     merged = []
@@ -114,7 +130,8 @@ def main():
         print(f"{lg[:8]}  seed A {s['A_marking']:.0f} -> far row {y_far:.0f} "
               f"({s['A_marking'] / (y_far - s['y_h']):.1f} m); rows {rows}", flush=True)
         r = calib([lg], args.root, rows, args.band,
-                  out.parent / f"calib_{lg[:8]}.json", args.cycle_set).get(lg, {})
+                  out.parent / f"calib_{lg[:8]}.json", args.cycle_set,
+                  args.dedup_row, args.dedup_px, args.side_row).get(lg, {})
         if r.get("status") != "ok":
             # The wider span refused where the near rows alone did not. Report the seed
             # answer and say which pass it came from; do not quietly keep the better one.

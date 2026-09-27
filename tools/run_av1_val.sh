@@ -12,8 +12,11 @@ cd "$(dirname "$0")/.."
 exec >> av1_overnight.log 2>&1
 echo "=== run_av1_val start $(date '+%F %T') ==="
 
-# Do not fight a download already in flight for the same chunks.
-for pid in $(pgrep -f "av1_fetch.py --tar tracking_val" || true); do
+# Do not fight a download already in flight for the same chunks. Match only real python
+# processes: a plain `pgrep -f` also matches any shell whose command line happens to quote
+# this script, which is exactly what happened on the first run -- the heredoc that wrote this
+# file put the fetch command into the calling shell's argv, and the wait never ended.
+for pid in $(pgrep -af "av1_fetch\.py --tar tracking_val" 2>/dev/null | awk '$2 ~ /python/ {print $1}'); do
   [ "$pid" = "$$" ] && continue
   echo "waiting for the running fetch (pid $pid)"
   while kill -0 "$pid" 2>/dev/null; do sleep 60; done
