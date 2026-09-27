@@ -100,6 +100,9 @@ def main():
     ap.add_argument("--maps", default="data/input/av1/map_files")
     ap.add_argument("--out-name", default="pinhole")
     ap.add_argument("--quality", type=int, default=95)
+    ap.add_argument("--allow-frame-gaps", action="store_true",
+                    help="proceed although the camera timestamps skip; the dash timing would "
+                         "then be measured on a timeline that is not uniform")
     ap.add_argument("--hide-factory", action="store_true",
                     help="keep h and A_factory out of the meta and off stdout, in a separate "
                          "factory_reference.json the measurement never opens. The marking "
@@ -128,6 +131,17 @@ def main():
     src, its = [p for p, k in zip(src, keep) if k], its[keep]
     if len(src) < 30:
         raise SystemExit(f"{log}: window {args.t0}-{args.t1}s holds {len(src)} frames")
+    # Frames are renumbered f00001.. below, so a missing one would silently shorten the
+    # timeline that the dash timing is measured on. AV1 names its frames by timestamp rather
+    # than by index, so the check is on the interval: anything past 1.5x the median gap is a
+    # dropped frame, not jitter.
+    dts = np.diff(its) / 1e9
+    med = float(np.median(dts))
+    bad = [(int(i), float(d)) for i, d in enumerate(dts) if d > 1.5 * med]
+    if bad and not args.allow_frame_gaps:
+        raise SystemExit(f"{log}: {len(bad)} gap(s) in the camera timestamps, median interval "
+                         f"{med*1000:.1f} ms, worst {max(d for _, d in bad)*1000:.1f} ms after "
+                         f"frame {bad[0][0]+1}. Re-extract, or pass --allow-frame-gaps.")
 
     t, pt = its / 1e9, ts / 1e9
     dt = 0.25                                               # speed over +/- 0.25 s

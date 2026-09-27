@@ -92,6 +92,9 @@ def main():
     ap.add_argument("--out-name", default="pinhole")
     ap.add_argument("--limit", type=int, default=0, help="stop after N frames (0 = all)")
     ap.add_argument("--quality", type=int, default=95)
+    ap.add_argument("--allow-frame-gaps", action="store_true",
+                    help="proceed although the source frame numbers skip; the dash timing "
+                         "would then be measured on a timeline that is not uniform")
     args = ap.parse_args()
 
     import cv2
@@ -108,6 +111,18 @@ def main():
     if args.limit:
         src = src[:args.limit]
 
+    # The frames are renumbered f00001.. below, so a hole in the source numbering would not
+    # show up anywhere -- it would silently shorten the timeline, and extract_odometer_signals
+    # assumes one frame per 1/fps. That matters here more than usual: these files came out of
+    # a 50 GB tar read over HTTP Range and re-aligned by searching for the ustar magic, so a
+    # dropped member is a real possibility rather than a hypothetical one.
+    idx_all = [int(q.stem.split("_")[-1]) for q in src]
+    gaps = [(x, y) for x, y in zip(idx_all, idx_all[1:]) if y != x + 1]
+    if gaps and not args.allow_frame_gaps:
+        raise SystemExit(f"{drive}: source frame numbers are not consecutive -- "
+                         f"{len(gaps)} gap(s), first {gaps[0][0]} -> {gaps[0][1]}. "
+                         f"Re-extract, or pass --allow-frame-gaps if the timeline is not used.")
+
     out = drive / args.out_name
     out.mkdir(parents=True, exist_ok=True)
     map1, map2 = cv2.initUndistortRectifyMap(K_old, dist, None, K_new, (W, H), cv2.CV_16SC2)
@@ -116,8 +131,8 @@ def main():
         if dst.exists():
             continue
         im = cv2.imread(str(p))
-        if im is None:
-            continue
+        if im is None:                      # same reason as the gap check: a skipped frame
+            raise SystemExit(f"{p}: unreadable, which would leave a hole in the timeline")
         im = cv2.remap(im, map1, map2, cv2.INTER_LINEAR)
         cv2.imwrite(str(dst), im, [cv2.IMWRITE_JPEG_QUALITY, args.quality])
 

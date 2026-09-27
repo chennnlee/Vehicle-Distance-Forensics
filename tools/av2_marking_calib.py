@@ -60,10 +60,17 @@ CYCLE_M = 12.19            # MUTCD broken line: 10 ft stripe + 30 ft gap
 PY = sys.executable
 
 
-def lane_lines(frames_dir, rows, band, step):
-    out = subprocess.run([PY, str(ROOT / "tools/lane_line_fit.py"), "--frames-dir", str(frames_dir),
-                          "--rows", rows, "--band", band, "--step", str(step)],
-                         capture_output=True, text=True).stdout
+def lane_lines(frames_dir, rows, band, step, dedup_row=None, side_row=None):
+    cmd = [PY, str(ROOT / "tools/lane_line_fit.py"), "--frames-dir", str(frames_dir),
+           "--rows", rows, "--band", band, "--step", str(step)]
+    # Left out entirely when not given, so the fit keeps its own defaults and every AV2 and
+    # comma2k19 run reproduces byte for byte. A camera whose horizon sits below row 620 has
+    # to pass its own values -- see lane_line_fit.py --dedup-row.
+    if dedup_row is not None:
+        cmd += ["--dedup-row", str(dedup_row)]
+    if side_row is not None:
+        cmd += ["--side-row", str(side_row)]
+    out = subprocess.run(cmd, capture_output=True, text=True).stdout
     m = re.search(r"ego lane: left x = (-?[\d.]+)y \+ (-?[\d.]+) \(n=(\d+)\), "
                   r"right x = (-?[\d.]+)y \+ (-?[\d.]+) \(n=(\d+)\)", out)
     v = re.search(r"vanishing point: row (-?[\d.]+), col (-?[\d.]+)", out)
@@ -99,6 +106,10 @@ def main():
     ap.add_argument("--rows", default="620,700,780,860")
     ap.add_argument("--band", default="580,890")
     ap.add_argument("--step", type=int, default=2)
+    ap.add_argument("--dedup-row", type=float, default=None,
+                    help="passed to lane_line_fit.py; omit to keep its default of 620")
+    ap.add_argument("--side-row", type=float, default=None,
+                    help="passed to lane_line_fit.py; omit to keep its default of 620")
     ap.add_argument("--max-resid-px", type=float, default=3.0)
     ap.add_argument("--min-inliers", type=int, default=15)
     ap.add_argument("--lane-ratio-range", default="1.39,3.64",
@@ -128,7 +139,8 @@ def main():
         r = dict(log=log, A_factory=meta["A_factory"], cy=meta["cy"], fps=meta["fps"],
                  v_mps=meta["speed_mps_median"], cam_h=meta.get("cam_height_m"))
 
-        lf = lane_lines(root / "pinhole", args.rows, args.band, args.step)
+        lf = lane_lines(root / "pinhole", args.rows, args.band, args.step,
+                        args.dedup_row, args.side_row)
         if lf is None:
             r.update(status="no lane pair"); results.append(r); print(f"{log[:8]}  ✗ no lane pair"); continue
         r.update(y_h=lf["y_h"], x_vp=lf["x_vp"], lane_resid_px=lf["resid"],

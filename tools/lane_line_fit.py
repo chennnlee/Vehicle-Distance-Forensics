@@ -41,6 +41,21 @@ ap.add_argument("--band", default="460,625", help="y0,y1 of the road band the ri
 ap.add_argument("--step", type=int, default=4, help="Frame stride when accumulating the ridge.")
 ap.add_argument("--peaks-per-row", type=int, default=8)
 ap.add_argument("--inlier-px", type=float, default=4.0)
+ap.add_argument("--dedup-row", type=float, default=620.0,
+                help="Row at which two candidate lines closer than --dedup-px count as one. "
+                     "Must sit BELOW the horizon: above it every candidate converges on the "
+                     "vanishing point and all but one are discarded. Default 620 is the value "
+                     "hard-coded when this tool was written (2026-09-03, commit 27a7c21, for "
+                     "comma2k19's 1164x874 frames, whose horizon is near row 380); it also "
+                     "happens to sit 108 px under AV2's horizon at 512. It does NOT transfer: "
+                     "A2D2 (1208 tall) and AV1 (1200 tall) put the horizon at 604-684, above "
+                     "it. Give a taller camera its own value.")
+ap.add_argument("--dedup-px", type=float, default=25.0)
+ap.add_argument("--side-row", type=float, default=620.0,
+                help="Row at which a line counts as left or right of the principal column. "
+                     "Same constraint and same default as --dedup-row, for the same reason: "
+                     "above the horizon a line's column crosses to the other side of the "
+                     "vanishing point.")
 a = ap.parse_args()
 frames_dir, step, out_rows = a.frames_dir, a.step, a.rows
 y0, y1 = (int(v) for v in a.band.split(","))
@@ -94,20 +109,14 @@ for _ in range(6000):
     mm, kk = np.polyfit(P[inl, 0], P[inl, 1], 1)
     lines.append((int(inl.sum()), float(mm), float(kk), float(np.abs(mm*P[inl,0]+kk-P[inl,1]).mean())))
 lines.sort(key=lambda t: -t[0])
-# De-duplicating candidate lines needs a row just BELOW the horizon, and it has to move with
-# the sensor. Above the horizon every candidate converges on the vanishing point, so distinct
-# lines read as duplicates and all but one are dropped; far below it, near-copies of one line
-# (the two edges of a stripe, or a stripe and the tyre polish beside it) separate by more than
-# the tolerance and fill the shortlist, crowding out the real partner. Row 620 with a 25 px
-# tolerance was hard-coded for AV2's 1024-tall frames, whose horizon is at ~512. On AV1's
-# 1200-tall frames the horizon is at ~604, so 620 sits 16 px ABOVE it and every line but one
-# was being discarded -- the same defect the left/right test had on A2D2, in the other place
-# it was written. Judging at the lowest emitted row instead is safely below the horizon but
-# far too generous: on AV2 it changed the chosen pair in half the logs and cost one of the
-# four that pass. So keep the geometry AV2 was tuned on and write it as a fraction of frame
-# height, which is provably a no-op there -- on 1024-tall frames it is row 620 and 25 px
-# again, to the pixel -- while moving with the sensor everywhere else.
-row_d, tol_d = 620.0 * H / 1024.0, 25.0 * H / 1024.0
+# Both this de-duplication and the left/right test below are judged at a row that has to sit
+# below the horizon, and neither can be a constant: 620 was written for one camera and goes
+# quietly wrong on taller ones (see --dedup-row). They are parameters now, defaulting to the
+# historical values so that every run made before 2026-09-28 reproduces exactly, and the
+# warning printed after the fit says when a row landed on the wrong side of the horizon --
+# the failure that is otherwise invisible, presenting either as "could not bracket the ego
+# lane" or as a shortlist holding six copies of one line.
+row_d, tol_d = a.dedup_row, a.dedup_px
 uniq = []
 for n, m, k, res in lines:
     if any(abs(m*row_d+k - (mm*row_d+kk)) < tol_d for _, mm, kk, _ in uniq):
@@ -127,14 +136,9 @@ for n, m, k, res in uniq:
 # vanishing point by 15 px. A windscreen camera sits near the middle of its lane,
 # so the midpoint is the criterion with physics behind it.
 # The row this is judged at must be BELOW the horizon, or left and right swap: a line's
-# column crosses to the other side of the vanishing point above it. Row 620 was hard-coded
-# for AV2's 1024-tall frames, where it sits ~110 px under a horizon at 512. On A2D2's
-# 1208-tall frames the horizon is at 684, so 620 is ABOVE it and every candidate lands on
-# the wrong side -- the fit then reports "could not bracket the ego lane" on imagery that is
-# perfectly good. Judge at the lowest row being emitted instead, which is below the horizon
-# by construction on any camera.
+# column crosses to the other side of the vanishing point above it. See --side-row.
 cxb = W / 2
-row_b = max(int(v) for v in out_rows.split(","))
+row_b = a.side_row
 left = [l for l in uniq if l[1]*row_b + l[2] < cxb and l[1] < 0]
 right = [l for l in uniq if l[1]*row_b + l[2] > cxb and l[1] > 0]
 if not (left and right):
@@ -145,6 +149,11 @@ vy = (R[2] - L[2]) / (L[1] - R[1])
 print(f"\nego lane: left x = {L[1]:.4f}y + {L[2]:.1f} (n={L[0]}), "
       f"right x = {R[1]:.4f}y + {R[2]:.1f} (n={R[0]})")
 print(f"vanishing point: row {vy:.1f}, col {L[1]*vy + L[2]:.1f}")
+for _nm, _rv in (("--dedup-row", row_d), ("--side-row", row_b)):
+    if _rv <= vy:
+        print(f"  WARNING {_nm} {_rv:.0f} is ABOVE the measured horizon {vy:.1f}: candidate "
+              f"lines converge there, so this fit may have dropped a real line or swapped "
+              f"left for right. Re-run with {_nm} below {vy:.0f}.")
 pairs = ";".join(f"{L[1]*y + L[2]:.0f},{y},{R[1]*y + R[2]:.0f},{y}"
                  for y in (int(v) for v in out_rows.split(",")))
 print(f"--pairs \"{pairs}\"")
