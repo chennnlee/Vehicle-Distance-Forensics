@@ -26,11 +26,17 @@ Measured on the eight logs that have both an answer and a factory value (AV2 4, 
     |dy_h| <= 6.3 px   ->  error 0.0 - 4.3%   (n=5)
     |dy_h| >= 6.9 px   ->  error 7.8 - 15.9%  (n=3)
 
-⚠ The 7 px threshold is calibrated on those eight, not derived, and the margin between the
-last pass (6.3) and the first fail (6.9) is under a pixel.  It is a pre-registered
-prediction, not an established rule: it was fixed on 2026-09-28 while the Argoverse 1
-training splits were still downloading, precisely so that the logs they produce test it out
-of sample.  Whatever those logs do to it goes in the record.
+⚠ The 7 px threshold is calibrated on those eight, not derived.  It is a pre-registered
+prediction rather than an established rule, but the pre-registration is narrower than it
+first looked and the exact scope matters:
+
+    train4 finished 13:00, train1 14:33, train3 16:02 -- all four AV1 samples were in hand
+    by 16:02.  The threshold was committed at 17:24.  So it is calibrated on every sample
+    that existed at the time, and the ONLY out-of-sample test is tracking_train2, which
+    began downloading at 16:02 and had not been measured.
+
+Whatever train2 produces goes in the record either way.  If it holds there, the threshold
+has survived one honest test on one split; that is all it will have earned.
 
 Usage:
   python3 tools/horizon_consistency_gate.py --calib data/output/av1_marking/calib.json \
