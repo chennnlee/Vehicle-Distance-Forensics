@@ -21,22 +21,27 @@ it.
 the degeneracy CLAUDE.md records for `odometer_distance_calib.py`.  It is usable as a
 consistency check and nothing more.
 
-Measured on the eight logs that have both an answer and a factory value (AV2 4, AV1 4):
+Measured on the eight logs available when the threshold was set (AV2 4, AV1 4):
 
-    |dy_h| <= 6.3 px   ->  error 0.0 - 4.3%   (n=5)
-    |dy_h| >= 6.9 px   ->  error 7.8 - 15.9%  (n=3)
+    |dy_h| <= 6.9 px   ->  error 0.0 - 7.8%   (n=6)
+    |dy_h| >= 8.5 px   ->  error 13.8, 15.9%  (n=2)
 
-⚠ The 7 px threshold is calibrated on those eight, not derived.  It is a pre-registered
-prediction rather than an established rule, but the pre-registration is narrower than it
-first looked and the exact scope matters:
+🔴 FALSIFIED by the split it was pre-registered against.  tracking_train2 finished at 17:56
+and produced three more logs: |dy_h| of 14.2, 16.5 and 20.9 px with errors of -3.5, +3.3 and
++4.7%.  All three would be thrown away by a 7 px gate, and all three are accurate.  Pooled
+over eleven logs no threshold separates:
 
-    train4 finished 13:00, train1 14:33, train3 16:02 -- all four AV1 samples were in hand
-    by 16:02.  The threshold was committed at 17:24.  So it is calibrated on every sample
-    that existed at the time, and the ONLY out-of-sample test is tracking_train2, which
-    began downloading at 16:02 and had not been measured.
+    7 px   ->  6 pass (worst 7.8%),  5 reject (best 3.3%)   three good answers discarded
+    10 px  ->  7 pass (worst 15.9%), 4 reject (best 3.3%)   the worst answer let through
 
-Whatever train2 produces goes in the record either way.  If it holds there, the threshold
-has survived one honest test on one split; that is all it will have earned.
+The rank correlation survives (Spearman rho +0.65, p 0.032, n 11) so the horizon really is
+where the error comes from, but the distributions overlap completely and a cut-off cannot be
+placed.  Keep this as a diagnostic that says which quantity to suspect, not as a gate.
+
+The separation on the first eight was a small-sample artefact, and the only reason that is
+known is that the number was fixed before the split that broke it existed.  Had the
+threshold been chosen after train2, it would have been tuned to eleven points and looked
+better while meaning less.
 
 Usage:
   python3 tools/horizon_consistency_gate.py --calib data/output/av1_marking/calib.json \
