@@ -2,7 +2,7 @@
 """Recover the hood-y an archived dashcam run used, by matching its ground plane.
 
 Two demos (dc002, dc008) were archived before the run parameters were being
-recorded, and CLAUDE.md carried a guess read off the image ("850 / 950"). A guess
+recorded, and the project notes carried a guess read off the image ("850 / 950"). A guess
 is not reproducible, and it is not harmless: hood-y is the bottom of the ROI the
 ground plane is fitted in, so a wrong value fits a different plane, and then a
 rerun cannot be compared against the archive at all. On dc008 the guess moved the

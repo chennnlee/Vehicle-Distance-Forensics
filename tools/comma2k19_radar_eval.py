@@ -40,7 +40,7 @@ comparison is decomposed the same way: because range = A/(y - y_h) on both sides
 with the same pixel row, 1/d_radar is an AFFINE function of 1/d_ours whose slope
 is the scale ratio A_ours/A_radar and whose intercept carries the horizon offset.
 That separates a focal-length error (uniform, slope) from a pitch error (grows
-with distance, intercept) -- the exact question left open in CLAUDE.md.
+with distance, intercept) -- the question left open in docs/VALIDATION_STATUS.md (appendix).
 
 CLOCKS ARE NOT ASSUMED ALIGNED. Radar and video run on different clocks and the
 odometer answers with a ~3 s window, so the report sweeps a lag and prints

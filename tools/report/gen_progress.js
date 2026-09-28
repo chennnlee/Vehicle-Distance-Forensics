@@ -1,7 +1,7 @@
 // 專題進度報告簡報產生器（2026-08-03）
 const PptxGenJS = require("pptxgenjs");
 
-const F = "/tmp/claude-1000/-home-s11244-code-114-Vehicle-Distance-Forensics/ea38521c-515c-43e9-917c-d60ecae1c421/scratchpad/figs";
+const F = process.env.REPORT_FIGS || "figs";  // 圖檔資料夾(2026-08-03 產生時的暫存圖;可用 REPORT_FIGS 指定)
 const INK = "0B0B0B", INK2 = "52514E", BLUE = "2A78D6", ORANGE = "EB6834", RULE = "D8D7D2";
 const FONT = "Microsoft JhengHei";
 

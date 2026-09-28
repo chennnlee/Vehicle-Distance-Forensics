@@ -1,6 +1,6 @@
 """Fit the two ego-lane lines from the accumulated contrast ridge, without eyeballing.
 
-CLAUDE.md records a real gap: the lane-width calibration's pixel pairs were never
+The project notes record a real gap (docs/METHODOLOGY_PITFALLS.md item 13): the lane-width calibration's pixel pairs were never
 stored, so every scale factor derived from them (hs005 0.66% CV, wow001 1.52%,
 dc006 2.0%, dc007 7.9%, dc003 11%) is unreproducible -- and on one occasion the
 wrong clip's pairs were copied across, which invalidated a whole set of numbers.

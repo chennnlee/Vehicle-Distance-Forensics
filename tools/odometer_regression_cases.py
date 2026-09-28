@@ -11,7 +11,7 @@ This file exists because the previous copy lived in /tmp and did not survive a
 WSL restart -- the frame directories are disposable, but the case parameters are
 the actual asset and belong somewhere durable.
 
-`points` are the hand-aimed sampling columns recorded in CLAUDE.md. Two cases
+`points` are the hand-aimed sampling columns recorded in docs/CASE_PARAMETERS.md. Two cases
 (hs003s, hs006s) were added during the 2026-08-02 GPS arbitration and their
 points were never written down; they carry `points=None`, meaning
 `auto_odometer_points.py` picks them. That is fine for a before/after

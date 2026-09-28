@@ -9,7 +9,7 @@ out weaker but still unambiguous, and that strength difference itself tells you
 which line is which (only the dashed one carries a period the odometer can lock
 onto).
 
-It also exposes the trap CLAUDE.md warns about: continuous longitudinal bright
+It also exposes a known trap (docs/ODOMETER_DESIGN.md; hs003s in docs/VALIDATION_STATUS.md): continuous longitudinal bright
 streaks (tyre polish, repair seams) look like ridges but have no period, and
 sampling on one of them is why hs003s scored 31% coverage / MAE 25.
 """

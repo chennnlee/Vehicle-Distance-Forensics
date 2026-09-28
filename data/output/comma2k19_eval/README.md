@@ -41,7 +41,7 @@
   加州灣區通勤,20 Hz、1164×874,CAN 車速 + GNSS/INS/vision 全域位姿。
   取得:Hugging Face `commaai/comma2k19` 的 `raw_data/Chunk_1.zip`(8.7 GB;MIT 授權)。
   BrnoCompSpeed(管線 A 的標準 benchmark)已移出範圍:管線 A(固定式路口 CCTV)於 2026-09-16
-  停止投入(素材的交比目標全是機車),原本「200 GB + `medusa.fit.vutbr.cz` 連不到」的阻塞不再需要處理;
+  停止投入(素材的畫質、幀率與拍攝距離條件不佳),原本「200 GB + `medusa.fit.vutbr.cz` 連不到」的阻塞不再需要處理;
   當時的調查見 `docs/PUBLIC_DATASET_BENCHMARK_PLAN.md`。
 - 素材量:Chunk_1 有 188 段 × 60 s,21 條路線,**全部同一台車**(dongle `b0c9d2329ad1606b`)。
   依「中位速 ≥ 70 km/h」挑段 → **24 段 / 24 分鐘 / 28,703 幀**,每條路線最多 2 段。

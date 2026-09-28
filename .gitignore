@@ -16,8 +16,7 @@ env/
 .vscode/
 .DS_Store
 
-# Local agent / cache noise
-.codex
+# Local cache
 .cache/
 
 # Build / packaging
@@ -79,9 +78,6 @@ tools/ml-sharp/
 .env
 .env.*
 
-# Claude Code local session files
-.claude/
-CLAUDE.md
 
 
 # Vendored monocular depth model repos (clone separately per docs/DEPTH_MODEL_BENCHMARK.md)

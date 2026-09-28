@@ -1,6 +1,6 @@
 # 待辦清單(BACKLOG)
 
-兩人共用的單一待辦清單。`CLAUDE.md` 自 commit 30f6f58(2026-09-17)起不進版控,只是各自的本機筆記;共享的待辦只寫在這裡。
+兩人共用的單一待辦清單。各自的本機筆記自 commit 30f6f58(2026-09-17)起不進版控;共享的待辦只寫在這裡。
 每項盡量三行內:在解決什麼 → 下一步 → 出處。做完就移到 F 並附 commit;新發現加在對應節末。
 路徑一律寫全、相對 repo 根目錄;出處標「本機,不在版控」的,只有使用者本機看得到。
 下列共享文件的內容這裡不重複:
@@ -75,8 +75,8 @@
   dc002 / dc003 / dc006 / dc007 同樣以 3.5 m 車道寬錨定,但像素對從未記錄(`data/output/lane_dash_calib/dc002_ref/` 只有虛線校正的 json,狀態 `no_spec_match`;其餘三案沒有資料夾),
   scale 與 CV 無法重現,重做用 `tools/lane_line_fit.py`(先修 A1)。(b) dc003 由封存 scale 反推掛高 0.996 m,低於合理區間 1.1–1.5 m,距離應標低信心。
   其餘四案(dc006、dc007、hs005、wow001)08-18 重算的掛高與原記錄值已收在 `docs/VALIDATION_STATUS.md` 文末附錄,抄進 CASE_PARAMETERS 時可一併引用。出處:2026-09-18 盤點。
-- **A10 使用者自己的 5 支工具 docstring 仍提到 `CLAUDE.md`**:`tools/` 下的 `comma2k19_radar_eval.py`、`lane_line_fit.py`、`lane_ridge_probe.py`、`odometer_regression_cases.py`、`solve_archived_hood.py`。
-  屬歷史敘述、不影響使用。下一步:改成「專案筆記(日期)」或指向對應 docs,不急。出處:`git grep -n CLAUDE`。
+- ~~**A10 使用者自己的 5 支工具 docstring 仍指向本機筆記**~~ **已處理(2026-09-28)**:`comma2k19_radar_eval.py`、`lane_line_fit.py`、`lane_ridge_probe.py`、`odometer_regression_cases.py`、`solve_archived_hood.py`
+  的說明改為指向對應的 docs。
 - **A11 `data/output/latest_run.txt` 在版控內**,內容是一個本機絕對路徑(指向已空的 `data/output/runs/`)。
   下一步:`git rm --cached`(`data/output/**` 已在 `.gitignore`),本機目錄見 E。出處:`git ls-files data/output`。
 - **A12 `tools/report/README.md` 的簡報體例只記三條**:2026-09-03 定的是五條,缺「每個數字出現前先定義它怎麼算」與「外部素材(如雷達)交代來源與處理步驟」;
@@ -123,21 +123,21 @@ Terry 負責深度模型 benchmark(`docs/DEPTH_MODEL_BENCHMARK.md`、`data/outpu
   下一步:Terry 在 README 補這四處揭露(含表中各案用哪組點),並把段平均腳本進版控。出處:`docs/haisheng_manual_eval/README.md`。
 - **B8 海盛 003「已知失效重現不了」的解釋**:本機那支片 ffprobe 實測是 1920×1080(「4K」只在檔名),README 的 4K 假說在原機器上不成立。
   較可能是程式碼版本(失效記錄早於 `_join_octaves`)或取樣點不同(原始取樣點從未記錄)。下一步:同一份片加 `--no-join-octaves` 重跑,依結果改 README 推測段與案表 hs003s 的 note。出處:同上「003」段;`tools/odometer_regression_cases.py`。
-- **B9 Terry 文件裡的 `CLAUDE.md` 引用**:`docs/DEPTH_MODEL_BENCHMARK.md` 7 處、`docs/haisheng_manual_eval/README.md` 8 處,另有 `tools/haisheng_manual_truth.py`、`tools/vanishing_point_range_calib.py` 的註解。
+- **B9 Terry 文件裡指向本機筆記的引用**:`docs/DEPTH_MODEL_BENCHMARK.md` 7 處、`docs/haisheng_manual_eval/README.md` 8 處,另有 `tools/haisheng_manual_truth.py`、`tools/vanishing_point_range_calib.py` 的註解。
   下一步改指:參數 / 點位 → `docs/CASE_PARAMETERS.md`;15 案表 → `tools/odometer_regression_cases.py`;週期是每條路的常數、跨路類、夜間較弱 → `docs/FAILURE_BOUNDARIES.md`;
   OSD GPS 仲裁與各驗證數字 → `docs/VALIDATION_STATUS.md`;方法論教訓(未記錄參數先反解、車牌錨、單幀空間週期)→ `docs/METHODOLOGY_PITFALLS.md`;
-  OSD 秒跳在重編碼幀上略異 → `data/output/report_final/README.md`;雷達驗證 → `data/output/comma2k19_radar_eval/README.md`。出處:`git grep -n CLAUDE`。
+  OSD 秒跳在重編碼幀上略異 → `data/output/report_final/README.md`;雷達驗證 → `data/output/comma2k19_radar_eval/README.md`。出處:2026-09-18 盤點。
 - **B10 0918 專題進度簡報的修正點**(簡報不在 repo;意見已整理,待使用者轉交):標線常數並非全程不看雷達(同 B2);方法 C 的 A 隨取樣列漂、閘放行負 A(同 B1);第 11 張 C 列是雷達常數版本;
   焦距 1:1 是程式恆等式,不是發現;第 16 張「現有管線遠場」的結論不穩;第 15 張「每段固定 30 m」錯(同 B7c)。
   下一步:使用者轉交後,Terry 依此修正簡報,修完回報。出處:2026-09-18 簡報審查(本機,不在版控)。
 - **B11 `DEPTH_MODEL_BENCHMARK.md` §10「下一步」已過時**:列的四步已在 §12–§18 做完;真正未做的散在各節(§9 第 5 點 Video-Depth-Anything 未寫成 backend、B3 各項)。
-  Terry 版筆記的第四輪摘要與「下一步候選」只剩 git 歷史(`316df7c:CLAUDE.md`)。下一步:§10 改成指向本節,需要保留的摘要移進他自己的文件。出處:同檔 §9、§10。
+  Terry 版筆記的第四輪摘要與「下一步候選」只剩 git 歷史(commit `316df7c` 當時的本機筆記)。下一步:§10 改成指向本節,需要保留的摘要移進他自己的文件。出處:同檔 §9、§10。
 
 ## C 兩人一起決定
 
-- **C1 ✅ 已決(2026-09-18):`CLAUDE.md` 的共享方式**:不進版控(commit 30f6f58),兩人各自保留本機筆記;共享知識一律進 `docs/`:
+- **C1 ✅ 已決(2026-09-18):本機筆記的共享方式**:不進版控(commit 30f6f58),兩人各自保留本機筆記;共享知識一律進 `docs/`:
   參數 → `docs/CASE_PARAMETERS.md`、失效邊界 → `docs/FAILURE_BOUNDARIES.md`、驗證數字 → `docs/VALIDATION_STATUS.md`、方法論錯誤 → `docs/METHODOLOGY_PITFALLS.md`、碼表設計 → `docs/ODOMETER_DESIGN.md`、待辦 → 本檔。
-  提醒:Terry pull 30f6f58 之後的 main 前,先把本機 `CLAUDE.md` 備份到 repo 外(該 commit 把它移出追蹤,pull 會動到工作目錄裡那份)。
+  提醒:Terry pull 30f6f58 之後的 main 前,先把本機筆記檔備份到 repo 外(該 commit 把它移出追蹤,pull 會動到工作目錄裡那份)。
 - **C2 教授第④點(微調偵測器)**:現況「建議不做,待教授確認」。兩條理由中,(a) 換更大現成模型只改善近場距離 1.7 個百分點、速度不動,站得住;
   (b)「近場與遠場所需的接地點修正符號相反」是在 Δ=0 下算的(近場 +2.88 px、遠場 −4.97 px);Δ≈1 m 時近場所需修正已趨近 0(+0.08 px),Δ=2 m 時兩者同號(−1.79 / −6.86 px),(b) 就不成立。
   重算法:合併 `data/output/comma2k19_radar_eval/seg{21,6,10}_pairs.csv`(n=908,由 `tools/comma2k19_radar_eval.py --dump-csv` 產生,指令見該 README 第三節),以 `sens_m_per_px ≤ 0.8` 分近/遠場取中位;
@@ -167,7 +167,7 @@ Terry 負責深度模型 benchmark(`docs/DEPTH_MODEL_BENCHMARK.md`、`data/outpu
   下一步:等 B 節處理完,兩人列出「可寫進報告的定案結論」,再一次更新 `tools/report/build_report.py` 與 README 驗證摘要;與 Terry 無關、現在就能改的「兩個可引用」矛盾見 A7(c)。
   完整報告不急。出處:`tools/report/build_report.py` 文獻回顧段;2026-09-18 盤點。
 - **C10 海盛 AI 版三方對照**:Terry 發現 `_ai.xlsx` 14 段中 13 段無法用表上自己的畫格數與距離重現速率,且 002 / 003 / 006 在相同畫格位置印出同一個 98.08。
-  確認前不可做「我方 vs 海盛 AI vs 人工」三方對照。下一步:決定要不要做;要做就由平常聯絡海盛的一方去問欄位定義。出處:Terry 版筆記(`316df7c:CLAUDE.md`)。
+  確認前不可做「我方 vs 海盛 AI vs 人工」三方對照。下一步:決定要不要做;要做就由平常聯絡海盛的一方去問欄位定義。出處:Terry 版筆記(commit `316df7c`)。
 
 ## D 研究待辦
 
@@ -224,7 +224,7 @@ Terry 負責深度模型 benchmark(`docs/DEPTH_MODEL_BENCHMARK.md`、`data/outpu
 - **dc003 / dc007 補距離校正**:沒過品質閘本身就是方法邊界的誠實標示,硬補是在掩蓋邊界;`data/output/dashcam_demo/_rerun/` 也把它們當係數 1.0 的對照組。見 `docs/CASE_PARAMETERS.md`。
 - **`data/output/dashcam_demo/_calib/` 對照影片用現行係數重算**:與現行係數差 ≤3.6%,肉眼不可辨,決定不重算(`effect.png` 另見 A3)。
 - **白天重錄 TDX、夜間 CCTV 改用 11x**:管線 A 已於 2026-09-16 停止投入,程式與成果保留、不刪。
-- **機車(含量測目標是機車的案)**:2026-07-12 決定只做汽車;兩個案例包的固定式 CCTV 案交比目標全是機車,一併出局。
+- **機車(含量測目標是機車的案)**:2026-07-12 決定只做汽車。
 - **BrnoCompSpeed**:隨管線 A 移出範圍;教授第③點已由 comma2k19 兩車 33 段 MAE 2.18(事前選段、對 GNSS/INS 位姿真值)完整交付。見 `docs/PUBLIC_DATASET_BENCHMARK_PLAN.md` 檔首。
 - **路釘半週期的脈衝寬度匹配濾波**:前提不成立(四個脈衝形狀特徵都不交替),已放棄。見 `docs/FAILURE_BOUNDARIES.md`。
 - **碼表的跨列相位「速度」閘**:試過,週期訊號的互相關多峰不可辨,會誤殺好段,勿重試;現行辨別引擎震動的跨列相位檢查是另一件事,保留。
@@ -232,4 +232,4 @@ Terry 負責深度模型 benchmark(`docs/DEPTH_MODEL_BENCHMARK.md`、`data/outpu
 - **雷達時間延遲補償**:三段最佳延遲正負號不一致,是過擬合。見 `data/output/comma2k19_radar_eval/README.md`「時間延遲」。
 - **再多抓 comma2k19 chunk**:全資料集只有兩台車,多抓只增加同一台車的樣本。見 `REPRODUCE.md` 路線一。
 - **09-18 已修好的文件問題**(commit a878d2e):dashcam_demo 分層警語與「`*_current/` 不要再乘」、絕對速度不能整個乘係數、0.4 km/h 標為循環已取代、`PLAN_20260819` 作廢橫幅、
-  `FAILURE_BOUNDARIES` 縫合層敘述、`--octave-threshold` 標無作用、BrnoCompSpeed 狀態、使用者文件裡指向 `CLAUDE.md` 的引用。
+  `FAILURE_BOUNDARIES` 縫合層敘述、`--octave-threshold` 標無作用、BrnoCompSpeed 狀態、使用者文件裡指向本機筆記的引用。
