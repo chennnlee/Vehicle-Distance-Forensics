@@ -41,6 +41,21 @@ ap.add_argument("--band", default="460,625", help="y0,y1 of the road band the ri
 ap.add_argument("--step", type=int, default=4, help="Frame stride when accumulating the ridge.")
 ap.add_argument("--peaks-per-row", type=int, default=8)
 ap.add_argument("--inlier-px", type=float, default=4.0)
+ap.add_argument("--dedup-row", type=float, default=620.0,
+                help="Row at which two candidate lines closer than --dedup-px count as one. "
+                     "Must sit BELOW the horizon: above it every candidate converges on the "
+                     "vanishing point and all but one are discarded. Default 620 is the value "
+                     "hard-coded when this tool was written (2026-09-03, commit 27a7c21, for "
+                     "comma2k19's 1164x874 frames, whose horizon is near row 380); it also "
+                     "happens to sit 108 px under AV2's horizon at 512. It does NOT transfer: "
+                     "A2D2 (1208 tall) and AV1 (1200 tall) put the horizon at 604-684, above "
+                     "it. Give a taller camera its own value.")
+ap.add_argument("--dedup-px", type=float, default=25.0)
+ap.add_argument("--side-row", type=float, default=620.0,
+                help="Row at which a line counts as left or right of the principal column. "
+                     "Same constraint and same default as --dedup-row, for the same reason: "
+                     "above the horizon a line's column crosses to the other side of the "
+                     "vanishing point.")
 a = ap.parse_args()
 frames_dir, step, out_rows = a.frames_dir, a.step, a.rows
 y0, y1 = (int(v) for v in a.band.split(","))
@@ -94,33 +109,51 @@ for _ in range(6000):
     mm, kk = np.polyfit(P[inl, 0], P[inl, 1], 1)
     lines.append((int(inl.sum()), float(mm), float(kk), float(np.abs(mm*P[inl,0]+kk-P[inl,1]).mean())))
 lines.sort(key=lambda t: -t[0])
+# Both this de-duplication and the left/right test below are judged at a row that has to sit
+# below the horizon, and neither can be a constant: 620 was written for one camera and goes
+# quietly wrong on taller ones (see --dedup-row). They are parameters now, defaulting to the
+# historical values so that every run made before 2026-09-28 reproduces exactly, and the
+# warning printed after the fit says when a row landed on the wrong side of the horizon --
+# the failure that is otherwise invisible, presenting either as "could not bracket the ego
+# lane" or as a shortlist holding six copies of one line.
+row_d, tol_d = a.dedup_row, a.dedup_px
 uniq = []
 for n, m, k, res in lines:
-    if any(abs(m*620+k - (mm*620+kk)) < 25 for _, mm, kk, _ in uniq):
+    if any(abs(m*row_d+k - (mm*row_d+kk)) < tol_d for _, mm, kk, _ in uniq):
         continue
     uniq.append((n, m, k, res))
     if len(uniq) >= 6:
         break
-print(f"\n{'n':>4s} {'slope':>7s} {'x@620':>7s} {'x@500':>7s} {'resid':>6s}")
+_rb = max(int(v) for v in out_rows.split(","))
+_rt = min(int(v) for v in out_rows.split(","))
+print(f"\n{'n':>4s} {'slope':>7s} {'x@'+str(_rb):>7s} {'x@'+str(_rt):>7s} {'resid':>6s}")
 for n, m, k, res in uniq:
-    print(f"{n:4d} {m:7.3f} {m*620+k:7.1f} {m*500+k:7.1f} {res:6.2f}")
+    print(f"{n:4d} {m:7.3f} {m*_rb+k:7.1f} {m*_rt+k:7.1f} {res:6.2f}")
 
 # Choose the pair whose midpoint at the bottom row sits closest to the principal
 # column. "Nearest line either side of centre" is the obvious rule and it is wrong:
 # a tyre-polish streak inboard of the paint wins it, and on seg21 that shifted the
 # vanishing point by 15 px. A windscreen camera sits near the middle of its lane,
 # so the midpoint is the criterion with physics behind it.
+# The row this is judged at must be BELOW the horizon, or left and right swap: a line's
+# column crosses to the other side of the vanishing point above it. See --side-row.
 cxb = W / 2
-left = [l for l in uniq if l[1]*620 + l[2] < cxb and l[1] < 0]
-right = [l for l in uniq if l[1]*620 + l[2] > cxb and l[1] > 0]
+row_b = a.side_row
+left = [l for l in uniq if l[1]*row_b + l[2] < cxb and l[1] < 0]
+right = [l for l in uniq if l[1]*row_b + l[2] > cxb and l[1] > 0]
 if not (left and right):
-    raise SystemExit("could not bracket the ego lane")
+    raise SystemExit(f"could not bracket the ego lane (judged at row {row_b})")
 L, R = min(((a, b) for a in left for b in right),
-           key=lambda ab: abs(0.5 * ((ab[0][1]*620 + ab[0][2]) + (ab[1][1]*620 + ab[1][2])) - cxb))
+           key=lambda ab: abs(0.5 * ((ab[0][1]*row_b + ab[0][2]) + (ab[1][1]*row_b + ab[1][2])) - cxb))
 vy = (R[2] - L[2]) / (L[1] - R[1])
 print(f"\nego lane: left x = {L[1]:.4f}y + {L[2]:.1f} (n={L[0]}), "
       f"right x = {R[1]:.4f}y + {R[2]:.1f} (n={R[0]})")
 print(f"vanishing point: row {vy:.1f}, col {L[1]*vy + L[2]:.1f}")
+for _nm, _rv in (("--dedup-row", row_d), ("--side-row", row_b)):
+    if _rv <= vy:
+        print(f"  WARNING {_nm} {_rv:.0f} is ABOVE the measured horizon {vy:.1f}: candidate "
+              f"lines converge there, so this fit may have dropped a real line or swapped "
+              f"left for right. Re-run with {_nm} below {vy:.0f}.")
 pairs = ";".join(f"{L[1]*y + L[2]:.0f},{y},{R[1]*y + R[2]:.0f},{y}"
                  for y in (int(v) for v in out_rows.split(",")))
 print(f"--pairs \"{pairs}\"")

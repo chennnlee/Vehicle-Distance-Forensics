@@ -60,10 +60,19 @@ CYCLE_M = 12.19            # MUTCD broken line: 10 ft stripe + 30 ft gap
 PY = sys.executable
 
 
-def lane_lines(frames_dir, rows, band, step):
-    out = subprocess.run([PY, str(ROOT / "tools/lane_line_fit.py"), "--frames-dir", str(frames_dir),
-                          "--rows", rows, "--band", band, "--step", str(step)],
-                         capture_output=True, text=True).stdout
+def lane_lines(frames_dir, rows, band, step, dedup_row=None, side_row=None, dedup_px=None):
+    cmd = [PY, str(ROOT / "tools/lane_line_fit.py"), "--frames-dir", str(frames_dir),
+           "--rows", rows, "--band", band, "--step", str(step)]
+    # Left out entirely when not given, so the fit keeps its own defaults and every AV2 and
+    # comma2k19 run reproduces byte for byte. A camera whose horizon sits below row 620 has
+    # to pass its own values -- see lane_line_fit.py --dedup-row.
+    if dedup_row is not None:
+        cmd += ["--dedup-row", str(dedup_row)]
+    if side_row is not None:
+        cmd += ["--side-row", str(side_row)]
+    if dedup_px is not None:
+        cmd += ["--dedup-px", str(dedup_px)]
+    out = subprocess.run(cmd, capture_output=True, text=True).stdout
     m = re.search(r"ego lane: left x = (-?[\d.]+)y \+ (-?[\d.]+) \(n=(\d+)\), "
                   r"right x = (-?[\d.]+)y \+ (-?[\d.]+) \(n=(\d+)\)", out)
     v = re.search(r"vanishing point: row (-?[\d.]+), col (-?[\d.]+)", out)
@@ -99,6 +108,12 @@ def main():
     ap.add_argument("--rows", default="620,700,780,860")
     ap.add_argument("--band", default="580,890")
     ap.add_argument("--step", type=int, default=2)
+    ap.add_argument("--dedup-row", type=float, default=None,
+                    help="passed to lane_line_fit.py; omit to keep its default of 620")
+    ap.add_argument("--dedup-px", type=float, default=None,
+                    help="passed to lane_line_fit.py; omit to keep its default of 25")
+    ap.add_argument("--side-row", type=float, default=None,
+                    help="passed to lane_line_fit.py; omit to keep its default of 620")
     ap.add_argument("--max-resid-px", type=float, default=3.0)
     ap.add_argument("--min-inliers", type=int, default=15)
     ap.add_argument("--lane-ratio-range", default="1.39,3.64",
@@ -126,9 +141,10 @@ def main():
             print(f"{log[:8]}  ✗ prepare failed"); continue
         meta = json.loads(meta_p.read_text())
         r = dict(log=log, A_factory=meta["A_factory"], cy=meta["cy"], fps=meta["fps"],
-                 v_mps=meta["speed_mps_median"], cam_h=meta["cam_height_m"])
+                 v_mps=meta["speed_mps_median"], cam_h=meta.get("cam_height_m"))
 
-        lf = lane_lines(root / "pinhole", args.rows, args.band, args.step)
+        lf = lane_lines(root / "pinhole", args.rows, args.band, args.step,
+                        args.dedup_row, args.side_row, args.dedup_px)
         if lf is None:
             r.update(status="no lane pair"); results.append(r); print(f"{log[:8]}  ✗ no lane pair"); continue
         r.update(y_h=lf["y_h"], x_vp=lf["x_vp"], lane_resid_px=lf["resid"],
@@ -177,17 +193,23 @@ def main():
             continue
         A = float(np.median(kept))
         r["cycles_used_m"] = sorted({l["matched_cycle_m"] for l in lines_out if l["accepted"]})
+        # A_factory is None when the log was prepared with --hide-factory: the value being
+        # recovered is then not on screen while the batch runs, and the comparison is a
+        # separate step afterwards. Datasets that publish it in the meta are unaffected.
+        fa = meta["A_factory"]
         r.update(status="ok", A_marking=A, n_pairs=len(kept),
-                 spread=float((max(kept) - min(kept)) / A), ratio=A / meta["A_factory"])
+                 spread=float((max(kept) - min(kept)) / A),
+                 ratio=(A / fa) if fa else None)
         results.append(r)
-        print(f"{log[:8]}  A {A:6.0f}  factory {meta['A_factory']:6.0f}  "
-              f"ratio {r['ratio']:.3f}  ({r['ratio'] * 100 - 100:+.1f}%)  "
+        score = (f"factory {fa:6.0f}  ratio {r['ratio']:.3f}  ({r['ratio'] * 100 - 100:+.1f}%)  "
+                 if fa else "factory withheld                  ")
+        print(f"{log[:8]}  A {A:6.0f}  {score}"
               f"pairs {len(kept)}  spread {r['spread'] * 100:.1f}%  "
               f"pitch {r['pitch_px']:+.1f} px  cycle {r['cycles_used_m']}")
 
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(json.dumps(results, indent=2))
-    ok = [r for r in results if r.get("status") == "ok"]
+    ok = [r for r in results if r.get("status") == "ok" and r.get("ratio")]
     print(f"\n{len(ok)}/{len(results)} logs produced an answer")
     if ok:
         rr = np.array([r["ratio"] for r in ok])
