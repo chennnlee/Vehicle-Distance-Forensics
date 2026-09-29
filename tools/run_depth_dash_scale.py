@@ -131,9 +131,23 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--sets", default="hs1230car,c2k19,av2,hs1029car,hs1230moto,hs1029moto")
     ap.add_argument("--keep-frames", action="store_true", help="keep extracted frames of the Haisheng batches")
+    ap.add_argument("--model", default="da3_metric",
+                    help="depth backend; any metric one (da3_metric, metric3d_v2, unidepth_v2, depth_pro)")
+    ap.add_argument("--only", default="", help="comma-separated keys to run (default: every clip in the sets)")
+    ap.add_argument("--fx", type=float, default=0.0,
+                    help="focal length fed to backends that take one (default: the backend's own 0.7955*width)")
     args = ap.parse_args()
+    global OUT
+    if args.model != "da3_metric" or args.fx:
+        OUT = OUT.parent / (f"final_{args.model}" + (f"_fx{args.fx:g}" if args.fx else ""))
     OUT.mkdir(parents=True, exist_ok=True)
     items = manifest(args.sets.split(","))
+    if args.only:
+        keep = set(args.only.split(","))
+        items = [i for i in items if i["key"] in keep]
+    for it in items:                               # depth maps are model-specific
+        if args.model != "da3_metric" or args.fx:
+            it["depth_cache"] = str(CACHE / f"{args.model}{'_fx%g' % args.fx if args.fx else ''}" / it["key"])
     (OUT / "manifest.json").write_text(json.dumps(items, indent=1, ensure_ascii=False))
     print(f"{len(items)} clips")
     for it in items:
@@ -145,8 +159,8 @@ def main():
         frames = D.list_frames(fr_dir)
         band = it["band"] if it["band"] is not None else haisheng_band(frames)
         eff_fps = it["fps"] / it["stride"]
-        res = D.run(str(fr_dir), eff_fps, it["cycle_m"], it["depth_cache"], band, it["step"], "da3_metric",
-                    it["duty"])
+        res = D.run(str(fr_dir), eff_fps, it["cycle_m"], it["depth_cache"], band, it["step"], args.model,
+                    it["duty"], fx=args.fx or None)
         res.update(key=it["key"], set=it["set"], source_fps=it["fps"], stride=it["stride"], band_bottom=band,
                    frame_index_note="original frame index = (listed frame number - 1) * stride")
         out.write_text(json.dumps(res))

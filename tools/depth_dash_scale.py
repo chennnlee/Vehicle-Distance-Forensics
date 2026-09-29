@@ -232,14 +232,15 @@ def lines_for(track, n):
 
 # ------------------------------------------------------------------ 2. profiles
 
-def load_depth(cache, frame: Path, backend=None):
+def load_depth(cache, frame: Path, backend=None, fx=None):
     """Depth map for one frame at half resolution; cached as float16 .npy unless cache is None."""
     fp = None if cache is None else Path(cache) / f"{frame.stem}.npy"
     if fp is not None and fp.exists():
         return np.load(fp).astype(np.float32)
     if backend is None:
         raise FileNotFoundError(fp or frame)
-    d = backend.infer_full(cv2.imread(str(frame)))["depth_m"]
+    out = backend.infer_full(cv2.imread(str(frame)), fx=fx)
+    d = out["depth_m"] if out["depth_m"] is not None else out["relative"]
     hh, ww = d.shape
     half = cv2.resize(d, (ww // 2, hh // 2), interpolation=cv2.INTER_AREA).astype(np.float16)
     if fp is not None:
@@ -344,7 +345,7 @@ def profile_shift(g1, p1, g2, p2, smax, dz, min_corr):
 # ------------------------------------------------------------------ driver
 
 def run(frames_dir, fps, cycle_m, depth_cache, band_bottom, step=2, model="da3_metric",
-        duty_ratio=0.4, p=PARAMS):
+        duty_ratio=0.4, p=PARAMS, fx=None):
     frames = list_frames(Path(frames_dir))
     idx = list(range(0, len(frames), step))
     track = track_lines(frames, idx, fps, band_bottom, p)
@@ -374,13 +375,13 @@ def run(frames_dir, fps, cycle_m, depth_cache, band_bottom, step=2, model="da3_m
             per_frame.append({})
             continue
         try:
-            d = load_depth(cache, frames[i], backend)
+            d = load_depth(cache, frames[i], backend, fx)
         except FileNotFoundError:
             if backend is None:
                 import depth_backends as DB
                 backend = DB.get_backend(model)
                 backend.load(device="cuda")
-            d = load_depth(cache, frames[i], backend)
+            d = load_depth(cache, frames[i], backend, fx)
         g = cv2.imread(str(frames[i]), cv2.IMREAD_GRAYSCALE)
         th = white_tophat(g, track["tophat_px"])
         rows = np.arange(y1 - 1, int(wd["vp_row"] + p["vp_margin"] * h), -1)

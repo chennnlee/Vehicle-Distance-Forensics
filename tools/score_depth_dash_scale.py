@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 ROOT = Path(__file__).resolve().parents[1]
 FINAL = ROOT / "data/output/dash_scale/final"
+MODEL = "da3_metric"
 IN = ROOT / "data/input"
 BENCH = ROOT / "data/output/depth_benchmark"
 NEAR_M = 32.0
@@ -68,7 +69,7 @@ def score_haisheng(manifest, rows_out):
     from haisheng_manual_truth import parse
     per_set = {}
     for it in manifest:
-        if not it["set"].startswith("hs"):
+        if not it["set"].startswith("hs") or not (FINAL / f"{it['key']}.json").exists():
             continue
         res = json.loads((FINAL / f"{it['key']}.json").read_text())
         xl = truth_xlsx(it)
@@ -113,11 +114,14 @@ C2K = {"c2k19_seg10": "b0c9d2329ad1606b_2018-07-30--13-44-30_10",
 def score_c2k19():
     out = {}
     for key, tag in C2K.items():
-        res = json.loads((FINAL / f"{key}.json").read_text())
+        rp = FINAL / f"{key}.json"
+        if not rp.exists():
+            continue
+        res = json.loads(rp.read_text())
         e = dict(status=res["status"], k=res.get("k"))
         if res["status"] == "ok":
             keep = {r["frame_idx"] for r in csv.DictReader(open(BENCH / f"paired_{tag}.csv"))}
-            rows = [r for r in csv.DictReader(open(BENCH / f"unf_{tag}__da3_metric.csv")) if r["frame_idx"] in keep]
+            rows = [r for r in csv.DictReader(open(BENCH / f"unf_{tag}__{MODEL}.csv")) if r["frame_idx"] in keep]
             pred = np.array([float(r["pred"]) for r in rows])
             gt = np.array([float(r["radar_range_m"]) for r in rows])
             n = gt < NEAR_M
@@ -158,7 +162,15 @@ def score_av2():
         e = dict(status=res["status"], k=res.get("k"))
         rows = list(csv.DictReader(open(fp)))
         gt = np.array([float(r["gt_m"]) for r in rows])
-        pred = np.array([float(r["da3_metric"]) if r["da3_metric"] not in ("", "nan") else np.nan for r in rows])
+        if MODEL in rows[0]:
+            pred = np.array([float(r[MODEL]) if r[MODEL] not in ("", "nan") else np.nan for r in rows])
+        else:                                      # model read at the same target pixels, run separately
+            pp = ROOT / f"data/output/av2_depth/pred_{log}__{MODEL}.csv"
+            if not pp.exists():
+                out[key] = dict(status=res["status"], k=res.get("k"), note=f"no {MODEL} readings at the targets")
+                continue
+            got = {(r["frame_idx"], r["px"], r["py"]): float(r["pred"]) for r in csv.DictReader(open(pp))}
+            pred = np.array([got.get((r["frame_idx"], r["px"], r["py"]), np.nan) for r in rows])
         n = (gt < NEAR_M) & np.isfinite(pred)
         e.update(n_near=int(n.sum()), raw_pct=float(np.median(np.abs(pred[n] - gt[n]) / gt[n]) * 100),
                  truth_k=float(np.median(gt[n] / pred[n])))
@@ -169,6 +181,17 @@ def score_av2():
 
 
 def main():
+    global FINAL, MODEL
+    import argparse
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--model", default="da3_metric")
+    ap.add_argument("--final-dir", default="", help="results dir (default: final, or final_<model>)")
+    args = ap.parse_args()
+    MODEL = args.model
+    if args.final_dir:
+        FINAL = Path(args.final_dir)
+    elif MODEL != "da3_metric":
+        FINAL = FINAL.parent / f"final_{MODEL}"
     seal = verify_seal()
     manifest = json.loads((FINAL / "manifest.json").read_text())
     rows = []

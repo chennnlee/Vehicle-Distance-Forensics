@@ -26,6 +26,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 import depth_dash_scale as D  # noqa: E402
+from score_depth_dash_scale import seg_speed  # noqa: E402
 
 FINAL = ROOT / "data/output/dash_scale/final"
 OUT = ROOT / "data/output/dash_scale/demo"
@@ -93,6 +94,22 @@ def truth_segments(key, manifest):
     return parse(xl[0])[1] if len(xl) == 1 else []
 
 
+C2K = {"c2k19_seg10": "b0c9d2329ad1606b_2018-07-30--13-44-30_10",
+       "c2k19_seg21": "b0c9d2329ad1606b_2018-08-15--09-01-03_21"}
+
+
+def c2k19_truth(key):
+    """Radar distance at the scored target pixel, and CAN speed, per frame index (0-based)."""
+    import csv
+    rows = csv.DictReader(open(ROOT / f"data/output/depth_benchmark/paired_{C2K[key]}.csv"))
+    out = {}
+    for r in rows:
+        out[int(r["frame_idx"].lstrip("f")) - 1] = dict(px=float(r["px"]), py=float(r["py"]),
+                                                          radar=float(r["radar_range_m"]),
+                                                          can=float(r["can_ego_kmh"]))
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--key", required=True)
@@ -116,7 +133,9 @@ def main():
     speeds = {s["frame_i"]: s for s in res["speeds"]}
     t_all = np.array([s["t_s"] for s in res["speeds"] if s["kmh"] is not None])
     v_all = np.array([s["kmh"] for s in res["speeds"] if s["kmh"] is not None])
-    segs = truth_segments(args.key, manifest) if args.truth else []
+    is_c2k = args.key in C2K
+    segs = truth_segments(args.key, manifest) if args.truth and not is_c2k else []
+    c2k = c2k19_truth(args.key) if args.truth and is_c2k else {}
     det = detector()
     half_px = max(4, int(round(p["band_half_px"] * h / 1080)))
     tdir = OUT / args.key / "frames"
@@ -124,16 +143,24 @@ def main():
         shutil.rmtree(tdir)
     tdir.mkdir(parents=True)
     prev = None
+    backend = None
     for j in range(min(len(idx), args.limit) if args.limit else len(idx)):
         fi = idx[j]
         img = D.black_out(cv2.imread(str(frames[fi])), boxes_osd)
         wd = D.lines_for(dict(windows=res["windows"]), j)
-        depth = D.load_depth(cache, frames[fi]) if cache.exists() else None
+        try:
+            depth = D.load_depth(cache if str(cache) else None, frames[fi], backend)
+        except FileNotFoundError:
+            import depth_backends as DB
+            backend = DB.get_backend("da3_metric")
+            backend.load(device="cuda")
+            depth = D.load_depth(cache if str(cache) else None, frames[fi], backend)
         fig = plt.figure(figsize=(19.2, 10.8), dpi=100)
-        fig.text(0.01, 0.985, f"海盛 {args.key}(原始影片,OSD 已塗黑)  影格 {fi * stride + 1}  t = {fi / fps:5.2f} s",
+        title = f"comma2k19 {args.key}(公開資料集,無 OSD)" if is_c2k else f"海盛 {args.key}(原始影片,OSD 已塗黑)"
+        fig.text(0.01, 0.985, f"{title}  影格 {fi * stride + 1}  t = {fi / fps:5.2f} s",
                  fontsize=16, fontweight="bold", va="top")
         fig.text(0.99, 0.985, f"結果封存於 {seal['sealed_utc']}(commit {seal['git_commit'][:7]})"
-                 + (",之後才開啟人工真值" if segs else ""), fontsize=11, ha="right", va="top", color="#555")
+                 + (",之後才開啟真值" if (segs or c2k) else ""), fontsize=11, ha="right", va="top", color="#555")
         a1 = fig.add_axes([0.005, 0.40, 0.49, 0.53])
         a1.imshow(img[..., ::-1])
         lines = {}
@@ -159,6 +186,10 @@ def main():
             a1.text(x0, y0 - 8, f"{k * zm:.1f} m", color="white", fontsize=15, fontweight="bold",
                     bbox=dict(fc=C_CAR, ec="none", pad=2))
             car_txt = f"前車距離  = k × 模型讀值 = {k:.3f} × {zm:.2f} = {k * zm:.1f} m"
+            tr = c2k.get(fi)
+            if tr and abs(tr["px"] - cx) < 40 and abs(tr["py"] - y1) < 40:
+                err = (k * zm - tr["radar"]) / tr["radar"] * 100
+                car_txt += f"  |  雷達 {tr['radar']:.1f} m({err:+.1f}%)"
         a1.set_title("① 追蹤虛線(綠)與前車(橘)", fontsize=14, fontweight="bold")
         a1.axis("off")
         a2 = fig.add_axes([0.505, 0.40, 0.49, 0.53])
@@ -183,24 +214,42 @@ def main():
                 cur = (grid * k, prof)
                 if prev is not None:
                     a3.plot(prev[0], prev[1], color="#BBBBBB", lw=1.5, label=f"{step} 幀前")
+                sp_prev = speeds.get(fi - step)
+                if prev is not None and sp_prev and sp_prev["kmh"] is not None:
+                    shift = sp_prev["kmh"] / 3.6 * step / fps
+                    a3.plot(prev[0] - shift, prev[1], color="#555555", lw=1.3, ls=(0, (4, 3)),
+                            label=f"{step} 幀前的曲線往近處平移 {shift:.2f} m")
                 a3.plot(cur[0], cur[1], color=C_LINE, lw=2, label="這一幀")
                 for z in np.arange(0, 40, L):
                     a3.axvline(z, color="#EEEEEE", lw=0.8, zorder=0)
         a3.set_xlim(0, 35)
         a3.set_xlabel("沿虛線的距離(公尺,= k × 模型讀值)", fontsize=11)
         a3.set_ylabel("虛線亮度", fontsize=11)
-        a3.set_title(f"③ 尺:虛線起點間距 = 法定 {L:.0f} m → k = {k:.3f}", fontsize=13, fontweight="bold")
+        a3.set_title(f"③ 尺:虛線起點間距 = 法定 {L:g} m → k = {k:.3f};平移量 ÷ 時間 = 自車速",
+                     fontsize=13, fontweight="bold")
         if cur is not None:
-            a3.legend(loc="upper right", fontsize=10)
+            a3.legend(loc="upper right", fontsize=9)
         prev = cur
         # speed over time
         a4 = fig.add_axes([0.53, 0.07, 0.45, 0.26])
-        a4.plot(t_all, v_all, ".", color=C_OURS, alpha=0.35, ms=4, label="我方每一對影格的讀值")
+        ymax = 1.6 * max([sg["speed_kmh"] for sg in segs] + [c["can"] for c in c2k.values()]
+                         + ([float(np.median(v_all))] if len(v_all) else [100]))
+        a4.plot(t_all, np.minimum(v_all, ymax * 0.98), ".", color=C_OURS, alpha=0.3, ms=4,
+                label="我方每一對影格的讀值(超出範圍的標在頂端)")
         for sg in segs:
-            a4.plot([(sg["f_start"] - 1) / stride / fps, (sg["f_end"] - 1) / stride / fps],
-                    [sg["speed_kmh"]] * 2, color=C_TRUTH, lw=3)
+            ta, tb = (sg["f_start"] - 1) / stride / fps, (sg["f_end"] - 1) / stride / fps
+            a4.plot([ta, tb], [sg["speed_kmh"]] * 2, color=C_TRUTH, lw=3.5)
+            ours, _, _ = seg_speed(res, sg["f_start"], sg["f_end"])
+            if ours is not None and tb <= fi / fps + 1e-9:
+                a4.plot([ta, tb], [ours] * 2, color=C_OURS, lw=3.5)
+                a4.text(tb, ours, f" {ours - sg['speed_kmh']:+.1f}", color=C_OURS, fontsize=9, va="center")
+        if c2k:
+            ts = sorted(c2k)
+            a4.plot([f / fps for f in ts], [c2k[f]["can"] for f in ts], color=C_TRUTH, lw=2, label="CAN 車速(真值)")
         if segs:
-            a4.plot([], [], color=C_TRUTH, lw=3, label="海盛人工畫格法(每段 30 m)")
+            a4.plot([], [], color=C_TRUTH, lw=3.5, label="海盛人工畫格法(每段 30 m)")
+            a4.plot([], [], color=C_OURS, lw=3.5, label="我方同一段平均(評分用,段落走完才顯示)")
+        a4.set_ylim(0, ymax)
         a4.axvline(fi / fps, color="#D93025", lw=1.2)
         a4.set_xlim(0, len(frames) / fps)
         a4.set_xlabel("時間(秒)", fontsize=11)
