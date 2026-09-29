@@ -68,8 +68,9 @@ def parse_args() -> argparse.Namespace:
                         "per legal dash cycle as the paint streams past, so ego speed = cycle_m / period. "
                         "Immune to lens distortion, SHARP scale, and pitch vibration -- unlike optical flow.")
     parser.add_argument("--dash-cycle-m", type=float, default=10.0,
-                        help="Legal dash cycle length: 4m dash + 6m gap = 10m on ordinary roads/expressways, "
-                        "4m + 8m = 12m on freeways.")
+                        help="Legal dash cycle length for the road in view. Taiwan: 10 m (4 m dash + 6 m gap, "
+                        "Art. 182 of the road marking regulations, freeways included). California state "
+                        "highways: 14.63 m (Caltrans Standard Plan A20A, 12 ft + 36 ft).")
     parser.add_argument("--odometer-window-s", type=float, default=3.0, help="Sliding autocorrelation window.")
     parser.add_argument("--octave-threshold", type=float, default=0.75,
                         help="DEPRECATED / no-op, kept so existing run commands still parse. The old "

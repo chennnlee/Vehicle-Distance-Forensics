@@ -2,7 +2,7 @@
 
 Any change to the fundamental-selection logic has to prove it does not move
 these. The set spans every regime the odometer has been shown to work in and
-several it fails in on purpose: 12 m-class freeway cruise at 100 km/h, urban
+several it fails in on purpose: freeway cruise at 100 km/h, urban
 40 km/h, a 10 fps resampled clip at the sampling-rate floor, a wide-FOV Mio that
 samples a continuous longitudinal smear instead of dashes, and two clips with
 machine-readable manual frame-by-frame truth.

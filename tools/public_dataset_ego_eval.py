@@ -4,12 +4,14 @@ Two modes, and the order matters:
 
   --solve-cycle   Do this FIRST on any new road network. The odometer converts a
                   measured period into a speed with v = cycle / T, so the legal
-                  dash cycle is an input, not an output. Taiwan taught us not to
-                  trust the spec sheet: the freeway spec says 4 m + 8 m = 12 m,
-                  but every measured stretch of 國1/國3/台86 came out at 10 m.
-                  This mode inverts the relation instead -- cycle = v_truth * T --
-                  and reports the distribution, so a foreign road's real cycle is
-                  measured rather than assumed.
+                  dash cycle is an input, not an output: look it up for the
+                  location and road class, with the clause it comes from
+                  (Taiwan 10 m, Art. 182, freeways included; California state
+                  highways 14.63 m, Caltrans Standard Plan A20A). This mode
+                  inverts the relation -- cycle = v_truth * T -- and reports the
+                  distribution, so the looked-up value is confirmed against the
+                  road actually driven. It uses the truth, so it is a check on
+                  the legal value, not a way to pick the cycle that is scored.
 
   (default)       With --dash-cycle-m given, report accuracy: coverage, MAE,
                   bias, error percentiles and a bootstrap CI on the MAE.

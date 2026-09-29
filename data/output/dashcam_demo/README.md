@@ -123,7 +123,7 @@ dc006 35 筆、dc007 3、hs005 3、wow001 1,橫移率 4.3–7.7 m/s。它們通�
 摘要檔把遠場速度分到獨立欄),**但逐幀的 `ranges.csv` 一直只附一個裸的靈敏度數值**,
 拿去做後續分析的人看不出哪些距離不可信。對原廠雷達實測:遠場距離中位偏 **20%**、
 最壞偏 **72%**(comma2k19 seg21:我方 38 m / 雷達 66 m),近場則只偏 7.0%
-(見 `data/output/comma2k19_radar_eval/README.md`)。
+(直接比雷達讀值;扣掉量測起點差 Δ 後遠場約 22–23%、近場約 5%,見 `data/output/comma2k19_radar_eval/README.md` 第四節)。
 **基底資料夾與 `*_trackv3/` 的封存 csv 是加欄之前跑的,沒有這一欄**(`*_current/ranges.csv` 已有);
 封存 csv 要自行判定就用
 `sens_m_per_px > 0.8`(或該欄為空/非有限值),判準與新欄位相同——
@@ -156,7 +156,7 @@ dc006 35 筆、dc007 3、hs005 3、wow001 1,橫移率 4.3–7.7 m/s。它們通�
   貓眼當時用的 sub-octave 修正已於 2026-07-24 改為諧波梳狀評分,見 `data/output/odometer_lag_audit/README.md`)。
 - **dc003**:Mio 超廣角+自車 60s 內換 3 種車道 → 碼表覆蓋 ~52%(低覆蓋誠實呈現);
   鎖定段 vs GPS 多在 ±4 km/h 內。60 條軌跡。碼表點需左右兩側鋪駐留點(挑點方法見 `docs/CASE_PARAMETERS.md` 的 dc003 條目)。
-- 三支 cycle 都是 **10m**(GPS 反驗;國1/台86 實測非 12m 規範值)。
+- 三支 cycle 都是 **10m**(設置規則第 182 條法定值;國1/台86 的 GPS 反驗一致)。
 
 **`ego_vs_gps_validation.png`** = 本次最重要的驗證圖:純視覺自車速 vs 影片 OSD 的 GPS。
 - **002 快速道路:MAE 1.2 km/h、bias +0.9(11/11 檢查點)**(對 GPS,非循環)
@@ -192,9 +192,9 @@ dc006 35 筆、dc007 3、hs005 3、wow001 1,橫移率 4.3–7.7 m/s。它們通�
    車道寬錨是橫向量的,約束不了前向尺度;前向距離另乘逐機修正係數
    (`--distance-correction`,由碼表訊號自己量出,只縮前向、不動橫向;見 `_calib/README.md`)。
 3. **自車速 = 虛線週期碼表**:法定虛線週期流過固定畫面列,亮度自相關的週期 T → v=cycle/T。
-   與 scale、鏡頭畸變、震動全部無關。週期規範是一般 4m 線+6m 空=10m、高速公路 4+8=12m,
-   **但國1、台86 經 GPS 反驗都是 10 m,國3(wow001)改用 12m 也明顯更差**,所有 demo 都用 `--dash-cycle-m 10`;
-   週期要先用 GPS 反驗,不要信規範先驗(見 `docs/CASE_PARAMETERS.md`)。
+   與 scale、鏡頭畸變、震動全部無關。週期取法定值:《道路交通標誌標線號誌設置規則》第 182 條車道線
+   線段 4 m、間距 6 m = 10 m,高速公路相同;**國1、台86 的 GPS 反驗都是 10 m,國3(wow001)改用 12 m 也明顯更差**,
+   所有 demo 都用 `--dash-cycle-m 10`。有 GPS 時再反驗(見 `docs/ODOMETER_DESIGN.md` §2.1、`docs/CASE_PARAMETERS.md`)。
    細節:橫向 ±120px 搜索帶(抗車道內漂移)、跳過中央瓣後取峰(抗虛線通過寬度)、
    三取樣點中位數共識、1s 中位數濾波。八度錯誤的處理:本節原文(7 月)寫的是次諧波檢查;2026-07-24 起改為
    諧波梳狀評分 + pulse x-offset 雙線閘(見 `data/output/odometer_lag_audit/README.md`),

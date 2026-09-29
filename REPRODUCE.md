@@ -65,8 +65,9 @@ python3 tools/public_dataset_ego_eval.py --batch-root /tmp/comma_seg_c1 --fps 20
   --dump-dir /tmp/comma_dump_c1 --out-json /tmp/batch_c1.json
 ```
 
-⚠ **`--dash-cycle-m 14.63` 是加州高速公路的規格(48 ft)**,不是通用常數。台灣國道實測是 10 m
-(不是規範寫的 12 m)。換路網一定要先用 `--solve-cycle` 反推驗證——
+⚠ **`--dash-cycle-m 14.63` 是加州州公路的法定值**(Caltrans Standard Plan A20A:12 ft + 36 ft = 48 ft),不是通用常數;
+台灣是 10 m(《道路交通標誌標線號誌設置規則》第 182 條:線段 4 m、間距 6 m,高速公路相同)。
+換路網先查當地(依位置與路類)的法定值,再用 `--solve-cycle` 反驗——
 虛線週期是「每條路的常數」,不是「每支影片的常數」。
 
 **預期數字**(全表同一族群:上面的事前選段規則、cycle 14.63 m;
@@ -100,6 +101,7 @@ python3 tools/public_dataset_ego_eval.py --batch-root /tmp/comma_seg_c1 --fps 20
 ## 路線二:他車距離與絕對速度 —— 需要 SHARP
 
 三段有原廠雷達的 comma2k19 片段,近場距離誤差中位 **7.0%**、目標絕對速 MAE **3.54 km/h**。
+距離誤差是直接比雷達讀值(Δ = 0)算的;扣掉雷達與相機的量測起點差後的敏感度表在雷達 README 第四節。
 完整參數在 `data/output/comma2k19_radar_eval/README.md` 第三節(ply、scale、碼表取樣點、車道線像素對全部列出)。
 
 ```bash
@@ -137,8 +139,8 @@ python3 tools/comma2k19_radar_eval.py --ranges <out>/ranges.csv --radar <out>/ra
   可用 `tools/solve_archived_hood.py` 從 `tracks.json` 反解出實際用過的 `hood-y`。
 - **換偵測器對速度不該有可分辨的改變**:對雷達的受控比較顯示目標速度配對差中位
   +0.03 km/h(區塊自助區間 −0.68~+0.78,含 0),85% 的幀接地點落在完全相同的像素列。
-  ⚠ **距離不是不變量**:同一次比較的近場距離由 7.49% 降到 5.77%,區間 −0.68~−0.20
-  **不含 0**(`data/output/detector_vs_radar/README.md`)。
+  ⚠ **距離不是不變量**:同一次比較的近場距離由 7.49% 降到 5.77%,|誤差| 配對差的區間 −0.68~−0.20 m
+  **不含 0**(Δ = 0 下;`data/output/detector_vs_radar/README.md`,Δ 取物理值時區間含 0)。
 
 ## 不能重現的部分
 

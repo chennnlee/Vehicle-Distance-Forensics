@@ -52,9 +52,9 @@ OSD 時鐘秒跳定時(NVR 串流謊報 fps)→ YOLOv8-seg 接地點 → 平面�
 |---|---|---|---|
 | 自車速(公開資料集) | comma2k19 GNSS/INS 位姿;兩台車 33 段 35,809 幀 | MAE **2.18 km/h**(±3 內 82.2%) | [comma2k19_eval](data/output/comma2k19_eval/README.md) 4-2-3 |
 | 自車速(台灣國道) | hs005 海盛人工畫格法,同窗 12 段 | MAE **0.69 km/h**、bias +0.01、12/12 在 ±3 內 | [hs005](data/output/dashcam_demo/hs005/README.md) |
-| 他車距離與絕對速度 | comma2k19 原廠雷達,3 段 908 配對幀 | 近場(≲32 m):距離誤差中位 **7.0%**、目標絕對速 MAE **3.54 km/h**;遠場 20.5% / 6.53 | [comma2k19_radar_eval](data/output/comma2k19_radar_eval/README.md) 第四節 |
-| 前向距離修正係數 | 碼表跨列法自校;量法另對雷達驗證,一致到 1.6–3.6% | 7 支 demo 中 5 支通過(0.760–0.903);dc003/dc007 拒發、維持未校正 | [_calib](data/output/dashcam_demo/_calib/README.md)、[雷達第五節](data/output/comma2k19_radar_eval/README.md) |
-| 偵測器影響 | 同一組雷達真值的受控比較(`yolov8m-seg` vs `yolo11x-seg`,547 共同幀) | 目標速度配對差 +0.03 km/h(CI 含 0);近場距離誤差 7.49% → 5.77%(近場實質上只有一台車) | [detector_vs_radar](data/output/detector_vs_radar/README.md) |
+| 他車距離與絕對速度 | comma2k19 原廠雷達,3 段 908 配對幀 | 近場(≲32 m):距離誤差中位 **7.0%**、目標絕對速 MAE **3.54 km/h**;遠場 20.5% / 6.53。距離欄直接比雷達讀值(Δ = 0);雷達從車頭量起,扣掉物理起點差 Δ ≈ 1.5–2.3 m 後近場 5.1–5.3%、遠場 22.4–22.9%,速度不變 | [comma2k19_radar_eval](data/output/comma2k19_radar_eval/README.md) 第四節 |
+| 前向距離修正係數 | 碼表跨列法自校;量法另對雷達驗證,Δ = 0 下一致到 1.6–3.6%,Δ 取物理值時差 7–12%(待固定 Δ 重擬) | 7 支 demo 中 5 支通過(0.760–0.903);dc003/dc007 拒發、維持未校正 | [_calib](data/output/dashcam_demo/_calib/README.md)、[雷達第五節](data/output/comma2k19_radar_eval/README.md) |
+| 偵測器影響 | 同一組雷達真值的受控比較(`yolov8m-seg` vs `yolo11x-seg`,547 共同幀) | 目標速度配對差 +0.03 km/h(CI 含 0);近場距離誤差 7.49% → 5.77%(Δ = 0;Δ 取物理值時分不出差別;近場實質上只有一台車) | [detector_vs_radar](data/output/detector_vs_radar/README.md) |
 
 - 2.18 排除了車 2 一段高速連接道(含該段的 34 段為 2.91,兩個數字都列在該 README)。
 - 雷達驗證的是**量法**,不是台灣五支 demo 的係數本身(該台相機需要的修正接近 1.0)。

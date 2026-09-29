@@ -82,7 +82,7 @@
 - **A12 `tools/report/README.md` 的簡報體例只記三條**:2026-09-03 定的是五條,缺「每個數字出現前先定義它怎麼算」與「外部素材(如雷達)交代來源與處理步驟」;
   「名詞與數字都要說用途」也要寫完整:技術名詞第一次出現說明它在系統裡負責什麼,每個結果數字下附一條「怎麼解讀」。
   下一步:補成五條。出處:該 README 的 `gen_radar_validation.js` 列;2026-09-03 使用者要求(本機筆記)。
-- **A13 碼表程式側兩處小修**:`ego_speed.csv` 有值但 method 為 `none` 的列、`--help` 文字過時(`--dash-cycle-m` 仍寫 12 m 等)。
+- **A13 碼表程式側兩處小修**:`ego_speed.csv` 有值但 method 為 `none` 的列、`--help` 文字過時(`--dash-cycle-m` 的「高速公路 12 m」已於 2026-09-30 改成法定出處,其餘仍待修)。
   下一步與修法選項見 `docs/ODOMETER_DESIGN.md` 第 6 節,這裡不重複。
 - **A14 `data/output/dashcam_demo/README.md` 沒寫管線 B 版的追蹤器 v3**:2026-07-16(commit 8c2e992)從管線 A 移植,至今仍是現行行為(已讀碼確認),
   但版控只有管線 A 版(`data/output/report_final/README.md`,門檻不同:縫合空隙 3 s、遠場 0.3 m/px、4 m/s² 加速度項)與 08-02 加的兩道閘。
@@ -111,6 +111,9 @@ Terry 負責深度模型 benchmark(`docs/DEPTH_MODEL_BENCHMARK.md`、`data/outpu
   下一步:產生程式進版控;盲測改在未過濾的 `unf_` 集合上評分,或在 §16 明確揭露。出處:`data/output/depth_benchmark/README.md` 檔名表;`tools/depth_blind_analysis.py`。
 - **B3 Δ 與接地點定義定案**:Δ(雷達在保險桿、相機在擋風玻璃的偏移)沒有獨立依據,接地點又有 band / lowest 兩種定義,方法 C 的絕對精度因此未定。
   Δ 定案後 C2、C6 都要跟著改。下一步:找 Δ 的獨立來源;建議優先序 Δ > 接地點定義 > 跨相機多樣本 > 盲測搬到台灣素材(台灣沒有第三方真值)。出處:同上 §15.4、§18.2、§18.4。
+  2026-09-30 進度:Δ 的符號與量級已有物理依據——雷達讀值 `LONG_DIST` 從車頭量起(openpilot v0.5.7 `toyota/radar_interface.py:89`),
+  相機在其後約 1.52 m(v0.9.0 `RADAR_TO_CAMERA`),加上前車車尾到後輪觸地,Δ ≈ +1.5 至 +2.3 m;Terry 09-27 由資料擬合得到的 Δ ≈ 0 已在分支 `terry/av1-train-scan`(ba235aa,未合併)撤回。
+  仍未用獨立量測固定;接地點定義也還沒定。
 - **B4 `tools/odometer_regression_cases.py` 的預設素材路徑**:09-16 改成 `data/input/海盛_20251230/…`、`data/input/海盛_20251029/…`,在使用者本機不存在,要設 `VDF_HAISHENG` / `VDF_BATCH` 才跑得動。
   下一步:檔首寫明這兩個環境變數,或找不到時明確報錯;與 A5 一起定。出處:該檔路徑設定段;commit 153bf1e。
 - **B5 `tools/run_blind_eval.sh`、`tools/run_fx_sweep.sh` 沒有 `pipefail`**:只有 `set -u`,推論輸出經 `| grep` 過濾,Python 失敗時錯誤被吞掉,腳本照樣印 `*_DONE`。
@@ -138,8 +141,10 @@ Terry 負責深度模型 benchmark(`docs/DEPTH_MODEL_BENCHMARK.md`、`data/outpu
 - **C1 ✅ 已決(2026-09-18):本機筆記的共享方式**:不進版控(commit 30f6f58),兩人各自保留本機筆記;共享知識一律進 `docs/`:
   參數 → `docs/CASE_PARAMETERS.md`、失效邊界 → `docs/FAILURE_BOUNDARIES.md`、驗證數字 → `docs/VALIDATION_STATUS.md`、方法論錯誤 → `docs/METHODOLOGY_PITFALLS.md`、碼表設計 → `docs/ODOMETER_DESIGN.md`、待辦 → 本檔。
   提醒:Terry pull 30f6f58 之後的 main 前,先把本機筆記檔備份到 repo 外(該 commit 把它移出追蹤,pull 會動到工作目錄裡那份)。
-- **C2 教授第④點(微調偵測器)**:現況「建議不做,待教授確認」。兩條理由中,(a) 換更大現成模型只改善近場距離 1.7 個百分點、速度不動,站得住;
+- **C2 教授第④點(微調偵測器)**:現況「建議不做,待教授確認」。兩條理由中,(a) 換更大現成模型只改善近場距離 1.7 個百分點(Δ=0)、速度不動,站得住;
+  2026-09-30 補:Δ 取物理值(+1.5 至 +2.3 m)時近場距離配對差的 block CI 含 0(分不出差別,見 `detector_vs_radar/README.md` 第三節末),(a) 的收益上界只會更小。
   (b)「近場與遠場所需的接地點修正符號相反」是在 Δ=0 下算的(近場 +2.88 px、遠場 −4.97 px);Δ≈1 m 時近場所需修正已趨近 0(+0.08 px),Δ=2 m 時兩者同號(−1.79 / −6.86 px),(b) 就不成立。
+  物理 Δ ≥ 1.5 m(見 B3),所以 (b) 不再引用。
   重算法:合併 `data/output/comma2k19_radar_eval/seg{21,6,10}_pairs.csv`(n=908,由 `tools/comma2k19_radar_eval.py --dump-csv` 產生,指令見該 README 第三節),以 `sens_m_per_px ≤ 0.8` 分近/遠場取中位;
   所需修正(px,正=往下)= `(range_ours_m − range_radar_m − Δ) / sens_m_per_px`。
   下一步:與教授確認;若不做,理由只用 (a),並同步 `docs/PUBLIC_DATASET_BENCHMARK_PLAN.md` 檔首④與報告結論後續建議 (3);之後再決定 E 的 nuScenes。Δ 定案見 B3。
@@ -154,12 +159,15 @@ Terry 負責深度模型 benchmark(`docs/DEPTH_MODEL_BENCHMARK.md`、`data/outpu
   `data/output/dashcam_demo/wow001/README.md`「補充仲裁」、`docs/haisheng_manual_eval/README.md`、`docs/VALIDATION_STATUS.md`。
 - **C5 `validation_report.md` 要不要進版控**:`data/output/dashcam_validation/<案>/validation_report.md`(9 案)不在版控,但 `data/output/dashcam_validation/README.md` 有引用;這些報告含完整案號。
   下一步:決定只留本機(README 註明),或去識別化後進版控。出處:`data/output/dashcam_validation/README.md`。
-- **C6 雷達 README 要不要揭露 Δ=0**:`data/output/comma2k19_radar_eval/README.md` 第四節的分層表直接拿雷達讀值比,等於假設 Δ=0,只有第五節附帶處提到 Δ。
+- **C6 ✅ 已做(2026-09-30):雷達 README 揭露 Δ=0**:第四節新增 Δ 的依據與敏感度表(Δ = 0 / 1 / 1.5 / 2 / 2.3 m)、第五節新增係數量法在 Δ 下的比較;
+  `detector_vs_radar/README.md`、`docs/VALIDATION_STATUS.md`、`README.md`、`REPRODUCE.md`、`docs/FAILURE_BOUNDARIES.md` 等引用處同步加上 Δ 條件。
+  剩下:固定 Δ 後重擬 A 再與碼表係數比(見 B3);報告與簡報等最後一起改。以下是原始紀錄。
+  原題 **雷達 README 要不要揭露 Δ=0**:`data/output/comma2k19_radar_eval/README.md` 第四節的分層表直接拿雷達讀值比,等於假設 Δ=0,只有第五節附帶處提到 Δ。
   重算(資料與分層同 C2,距離誤差 = `|range_ours_m − (range_radar_m + Δ)| / (range_radar_m + Δ)` 取中位):Δ=0 / 1 / 2 m 時近場誤差 7.0 / 5.1 / 5.7%、遠場 20.5 / 21.7 / 22.9%;
   係數仲裁的「差 1.6–3.6%」也會動幾個百分點。
   下一步:先加一行「未扣 Δ」與敏感度,或等 B3 定案一起改(報告同步);C2、C6 的重算若要留存,由使用者寫成 `tools/` 下的小腳本。
   出處:同 README;2026-09-18 盤點重算(本機,不在版控;照上列公式可重現)。
-- **C7 刪 `origin/terry/depth-benchmark`**:PR #2 已於 09-17 合併、本機已整合。下一步:Terry 確認分支上沒有未合併的東西後刪。出處:2026-09-18 整理紀錄。
+- **C7 ✅ 已做(2026-09-30,Terry 刪除)**:PR #2 已於 09-17 合併、本機已整合。下一步:Terry 確認分支上沒有未合併的東西後刪。出處:2026-09-18 整理紀錄。
 - **C8 公開 repo 裡已有的案件識別資訊**:`tools/odometer_regression_cases.py` 用完整鑑定案號比對片檔名,`data/output/cctv_validation/qz1130221/README.md` 首段也寫了完整案號。
   下一步:決定是否改成短代號(案號對應放本機或環境變數);注意 git 歷史仍保留原文,而 main 的規則集禁止強推。出處:`git grep`。
 - **C9 報告與 README 何時納入 Terry 的結果**:最新報告 `data/output/report_draft/成果報告草稿_20260916b.docx`(本機,不在版控)沒有深度模型 benchmark 與海盛 20251230 評估,
