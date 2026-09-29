@@ -570,7 +570,7 @@ AV1 影格 1200 高、地平線 604,620 在**地平線上方** → 所有候選�
   要回到物理保證就得抽完刪 tar、要真值時再重抓(約 2.5 小時)。
 - ⚠ **未解釋的一件事**:2026-09-28 01:19:01,sample log(`c6911883`,只拿來除錯、不評分)的
   `per_sweep_annotations_amodal/` 出現在磁碟上。我的抽取工具在程式上排除它,01:05 抽完時
-  該資料夾只有四個項目;當時同機有另一個 claude session(01:13:48 還原過我改的檔案)。
+  該資料夾只有四個項目;當時同機還有其他程序在操作 repo(01:13:48 還原過我改的檔案)。
   **無法證明是誰寫的,照實記。** val 的 24 支一個真值檔都還沒抽。
 
 ### 6.10.4b 結果(2026-09-28 04:20 跑完):**AV1 也沒有給出跨相機成功案例**
@@ -726,12 +726,9 @@ Spearman rho=+0.74),於是**在 train2 尚未量測時把門檻 7 px 寫死並 c
 
 ---
 
-## 8. 新 session / 換一台電腦要怎麼接手
+## 8. 不在 git 裡的資料怎麼重建
 
-**自動接得到的**(不必做任何事):`CLAUDE.md`(每個 session 自動載入,裡面指向本檔)、
-版控中的 `tools/`、`docs/`、所有 commit。
-
-**不在 git 裡、但重跑得回來的**(`data/` 被 gitignore):
+版控裡有 `tools/`、`docs/` 與所有 commit;`data/` 被 gitignore,重建方式如下:
 
 | 東西 | 大小 | 怎麼還原 |
 |---|---|---|
@@ -745,14 +742,10 @@ Spearman rho=+0.74),於是**在 train2 尚未量測時把門檻 7 px 寫死並 c
 ⚠ **真值檔 `data/input/av2/<log>/annotations.feather` 要重跑盲測前必須刪掉**,
 否則 `seal_predictions.py` 會拒絕封存(這是刻意的)。
 
-**完全不會保留的**:對話本身、`/tmp/claude-1000/...` 暫存區。
-接回上一次對話用 `claude --continue`(同一個資料夾);換視窗或換機器則靠 `CLAUDE.md` + 本檔。
+**另一台電腦**:`git clone` 後照上表重建 `data/`。
 
-**跨機器**:先 `git push`,另一台 `git clone` 後照上表重建 `data/`。
-個人筆記若不想進共用 repo,放 `CLAUDE.local.md`(加進 `.gitignore`,每台機器各自一份)。
-
-**長時間工作要跨 session 存活**:用 `nohup <指令> > <repo 內的 log 檔> 2>&1 &`,
-log 寫在 repo 裡(不要寫 `/tmp`),新 session 才讀得到進度。
+**長時間執行**:用 `nohup <指令> > <repo 內的 log 檔> 2>&1 &`,log 寫在 repo 裡
+(不要寫 `/tmp`,WSL 重開就消失)。
 ⚠ Windows 進入睡眠時 WSL 會整個凍結、網路中斷;要避免請先 `powercfg /change standby-timeout-ac 0`。
 
 ---
@@ -1019,6 +1012,8 @@ $P tools/report/demo_haisheng_dash_scale.py --key hs1230car_002 --truth
 影格:海盛 20251230 在 `data/input/_frames_cache/hs_raw/<案>/`(由原始影片 `ffmpeg -vsync 0` 抽出);
 其他海盛片由執行器依步距抽到 `data/input/_frames_cache/dds/`,跑完即刪。
 
+
+⚠ 各 `seal.json` 的 `git_commit` 記的是 2026-09-29 晚間整理文件用字之前的編號(程式內容相同):`7e1aa88` = `25dacd2`、`4975586` = `2e6c7c5`、`86ab990` = `bf94bb1`、`1fdbb24` = `9b7c087`、`e87e279` = `2b1a3b6`。
 
 ### 11.11 前車相對速度與絕對速度 vs comma2k19 原廠雷達(2026-09-29 晚間,事前登錄 → 封存 → 評分)
 

@@ -18,7 +18,7 @@ it.
 
 ⚠ The fitted (A, y_h) is NOT a better answer.  Substituting it degrades AV2 from 1.7% to
 5.8% median error, because A and y_h trade off against each other over a short row span --
-the degeneracy CLAUDE.md records for `odometer_distance_calib.py`.  It is usable as a
+the degeneracy the project notes record for `odometer_distance_calib.py`.  It is usable as a
 consistency check and nothing more.
 
 Measured on the eight logs available when the threshold was set (AV2 4, AV1 4):

@@ -9,7 +9,7 @@ lane on each side, which is the "car we are following, or the one in the next la
 report talks about.  Lane width is read off the two fitted lines at that row, so it needs
 no metric scale.
 
-Both contact-point definitions go in the same row, because CLAUDE.md records that they are
+Both contact-point definitions go in the same row, because the project notes record that they are
 not interchangeable and that confusing them cost a 10-15% range error on comma2k19:
 
   py_max    lowest point of the mask -- where the tyre meets the road.  This is pipeline

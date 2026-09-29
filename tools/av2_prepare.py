@@ -2,7 +2,7 @@
 """Turn an Argoverse 2 log's front camera into the frame folder the pipeline's tools expect.
 
 Why this dataset.  The marking method needs a longitudinal anchor, which means enough
-frames per dash cycle: fps >= 8 * v / cycle (CLAUDE.md's sampling floor, found on KITTI).
+frames per dash cycle: fps >= 8 * v / cycle (the project's sampling floor, found on KITTI).
 AV2's ring cameras run at 20 Hz, so a 12.19 m cycle at 50 km/h still gives 17 frames per
 cycle, where KITTI's 10 Hz would give 8.  It also carries what the Taiwanese clips cannot:
 human-annotated lidar cuboids for the other vehicles, and a factory calibration.
@@ -28,7 +28,7 @@ trusting it: `lane_line_fit.py` fits straight lines to the lane markings, and it
 is a few px on a rectified image and tens of px on a distorted one.
 
 Ego speed comes from city_SE3_egovehicle (GPS/IMU).  The measurement does not use it; it
-is here to cross-check the assumed dash cycle, exactly as CLAUDE.md requires of the
+is here to cross-check the assumed dash cycle, exactly as the project notes require of the
 Taiwanese clips ("週期勿信規範先驗 ... 有 GPS OSD 就先反驗").
 
 Usage:

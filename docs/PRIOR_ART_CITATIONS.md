@@ -553,27 +553,27 @@
 ## 未能完成驗證(引用前必須自行取回)
 
 - **MapAnything: Evaluating Monocular Metric Depth Models for 3D Urban Asset Localization**　(depth-anchor)　https://arxiv.org/abs/2509.14839
-  - 原因:HOW VERIFIED: fetched https://arxiv.org/abs/2509.14839 and the v1/v2/v3 abs pages, plus the full v3 HTML (256 KB, saved to scratchpad as map3.html / map3.flat) and grepped the whol
+  - 原因:HOW VERIFIED: fetched https://arxiv.org/abs/2509.14839 and the v1/v2/v3 abs pages, plus the full v3 HTML (256 KB, saved locally as map3.html / map3.flat) and grepped the whol
 - **Determination of Vehicle Speed from Recorded Video Using Reverse Projection Photogrammetry and File Metadata**　(forensic)　https://brycewestlake.com/wp-content/uploads/2021/03/Westlake-JForensicSci-Determination-of-Vehicle-Speed-Epstein-Westlake-2019_stamped.pdf
-  - 原因:agent did not return a check
+  - 原因:查核未取得結果
 - **Simulation-based reconstruction of traffic incidents from moving vehicle mono-camera**　(forensic)　https://api.crossref.org/works?query.bibliographic=Simulation-based+reconstruction+of+traffic+incidents+from+moving+vehicle+mono-camera
-  - 原因:RETRIEVED BY ME (3 independent sources, all fetched this session): 1. Crossref REST (https://api.crossref.org/works/10.1016/j.scijus.2021.11.001 and the raw ?query.bibliographic= f
+  - 原因:RETRIEVED (3 independent sources, all fetched during verification): 1. Crossref REST (https://api.crossref.org/works/10.1016/j.scijus.2021.11.001 and the raw ?query.bibliographic= f
 - **Dynamic driving metric output generation using computer vision methods (patent family)**　(marking-odometer)　https://patents.google.com/patent/US10817729B2/en
-  - 原因:agent did not return a check
+  - 原因:查核未取得結果
 - **The study on the estimation of vehicles speed using a dashboard camera**　(marking-odometer)　https://link.springer.com/article/10.1007/s11042-023-17171-2?error=cookies_not_supported
-  - 原因:THE PAPER IS REAL. Not fabricated, not misremembered. I retrieved it three independent ways: Crossref API (api.crossref.org/works/10.1007/s11042-023-17171-2), the Semantic Scholar
+  - 原因:THE PAPER IS REAL. Retrieved three independent ways: Crossref API (api.crossref.org/works/10.1007/s11042-023-17171-2), the Semantic Scholar
 - **End-to-end Learning for Inter-Vehicle Distance and Relative Velocity Estimation in ADAS with a Monocular Camera**　(benchmarks)　https://arxiv.org/abs/2006.04082 (PDF read: https://arxiv.org/pdf/2006.04082)
-  - 原因:agent did not return a check
+  - 原因:查核未取得結果
 - **A Video-Based System for Vehicle Speed Measurement in Urban Roadways (UTFPR dataset)**　(benchmarks)　https://api.crossref.org/works/10.1109/tits.2016.2606369 (Crossref record retrieved; publisher page not accessible)
-  - 原因:agent did not return a check
+  - 原因:查核未取得結果
 - **Efficient Vision-based Vehicle Speed Estimation**　(benchmarks)　https://arxiv.org/abs/2505.01203
-  - 原因:agent did not return a check
+  - 原因:查核未取得結果
 - **GVDepth: Zero-Shot Monocular Depth Estimation for Ground Vehicles based on Probabilistic Cue Fusion**　(benchmarks)　https://arxiv.org/abs/2412.06080
-  - 原因:agent did not return a check
+  - 原因:查核未取得結果
 - **Vehicle distance estimation using a mono-camera for FCW/AEB systems**　(benchmarks)　https://api.crossref.org/works/10.1007/s12239-016-0050-9 (Crossref record retrieved; Springer landing page requires authentication)
-  - 原因:agent did not return a check
+  - 原因:查核未取得結果
 - **Vehicle Speed Measurement Methodology Robust to Playback Speed-Manipulated Video File**　(benchmarks)　https://api.crossref.org/works/10.1109/access.2021.3115500 (Crossref record retrieved; IEEE Xplore page not retrievable from here)
-  - 原因:agent did not return a check
+  - 原因:查核未取得結果
 
-另有搜尋階段列為 `unverified`(抓不到頁面)的候選,見工作流輸出;
+另有搜尋階段列為 `unverified`(抓不到頁面)的候選未列入本檔;
 其中 `Sensors 18(9):2956, 2018`(Around View Monitor 的車道標線自標定)是值得追的近似前案。

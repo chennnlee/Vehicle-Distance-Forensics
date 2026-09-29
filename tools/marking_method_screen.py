@@ -12,7 +12,7 @@ looked 2x kinder than it is.
     d = A / (py - y_h),  A = h * f          the range model the whole method rests on
 
   (1) frames per dash cycle = fps * cycle / v >= ~8.  Below that the autocorrelation cannot
-      separate a period from its octaves.  Found on KITTI at 10 Hz (CLAUDE.md).
+      separate a period from its octaves.  Found on KITTI at 10 Hz (project notes).
   (2) the 13-row sampling band (y-6..y+6, `extract_odometer_signals`) must cover less road
       at the FARTHEST sampled row than half a dash, or the dash is averaged away:
           cover(y) = A/(dy-6) - A/(dy+6),  dy = y - y_h

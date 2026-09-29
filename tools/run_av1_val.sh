@@ -54,5 +54,5 @@ PY
 echo "$SUM"
 
 DESK=$(ls -d /mnt/c/Users/*/OneDrive/Desktop 2>/dev/null | head -1)
-[ -n "$DESK" ] && printf 'Argoverse 1 validation run finished %s\n\n%s\n\nNext: open the Claude Code conversation in Vehicle-Distance-Forensics.\nLog: av1_overnight.log\n' "$(date '+%F %T')" "$SUM" > "$DESK/AV1_跑完了.txt"
+[ -n "$DESK" ] && printf 'Argoverse 1 validation run finished %s\n\n%s\n\nLog: av1_overnight.log\n' "$(date '+%F %T')" "$SUM" > "$DESK/AV1_跑完了.txt"
 powershell.exe -NoProfile -Command "Add-Type -AssemblyName System.Windows.Forms; \$n=New-Object System.Windows.Forms.NotifyIcon; \$n.Icon=[System.Drawing.SystemIcons]::Information; \$n.Visible=\$true; \$n.ShowBalloonTip(30000,'Vehicle-Distance-Forensics','AV1 跑完了 - 桌面有結果','Info'); Start-Sleep -Seconds 15" 2>/dev/null || true

@@ -24,7 +24,7 @@ So the rows are chosen in two passes, from the measurement:
 Nothing here reads a cuboid, and with `av1_prepare.py --hide-factory` nothing reads h or
 A_factory either: those sit in factory_reference.json, which only the scoring step opens.
 Ego speed is used, in the batch tool's cycle gate only, to turn a locked period into the
-cycle length it implies -- the same external reference CLAUDE.md already requires of the
+cycle length it implies -- the same external reference the project notes already require of the
 Taiwanese clips, and not the quantity being scored.
 
 Usage:

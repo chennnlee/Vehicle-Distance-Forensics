@@ -27,7 +27,7 @@ The cycle gate is the one this batch added.  A line's own pair-to-pair spread do
 notice a wrong period: on the Miami log the right-hand line locked onto a 6.94-frame
 rhythm (kerb seams, not paint) with a tidy 4.5% spread, and pooling it pulled A from 1547
 to 1562.  Ego speed from the poses converts the locked period into the cycle length it
-implies (v * period / fps).  This is the rule CLAUDE.md already states for Taiwan
+implies (v * period / fps).  This is the rule the project notes already state for Taiwan
 ("週期勿信規範先驗 ... 有 GPS 就先反驗"), applied where a speed reference exists.
 
 ⚠ The first version of that gate asked only whether the implied cycle was within +-20% of

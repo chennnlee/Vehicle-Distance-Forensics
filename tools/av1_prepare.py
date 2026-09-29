@@ -34,7 +34,7 @@ lane markings must image as straight lines.  Check that independently rather tha
 it -- lane_line_fit.py's residual is a few px on a rectified image and tens on a raw one.
 
 Ego speed comes from the per-timestamp city_SE3_egovehicle poses (GPS/IMU).  The measurement
-does not use it; it is there to cross-check the assumed dash cycle, as CLAUDE.md requires.
+does not use it; it is there to cross-check the assumed dash cycle, as the project notes require.
 
 Usage:
   python3 tools/av1_prepare.py --log data/input/av1/<log id>

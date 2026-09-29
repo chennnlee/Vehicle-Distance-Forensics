@@ -11,7 +11,7 @@
 #
 # Resumable: a model/segment whose output already exists is skipped, so an interrupted run
 # continues by invoking it again. The log is written inside the repo on purpose -- /tmp
-# does not survive a WSL restart or the end of an agent session, and a previous attempt at
+# does not survive a WSL restart, and a previous attempt at
 # this check was lost that way.
 set -u
 cd "$(dirname "$0")/.."

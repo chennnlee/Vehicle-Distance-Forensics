@@ -20,7 +20,7 @@ in the report differ in exactly one thing: where the geometry comes from.
 
         gives one estimate of A per row pair.  Vehicle speed cancels in lag/period.
         The lag and period come from `odometer_distance_calib.py`, whose correction
-        factors were checked against comma2k19's factory radar (CLAUDE.md, 2026-09-01).
+        factors were checked against comma2k19's factory radar (project notes, 2026-09-01).
 
 Why not measure the dash spacing in a single frame (withdrawn 2026-09-17)
 -------------------------------------------------------------------------
@@ -36,7 +36,7 @@ and set their spacing to one cycle.  It reported A = 1153 / 1139 for two segment
     cycle spans roughly the whole band, so a frame seldom holds two dash starts.
     The pairs it did find were fragments of one dash and gave A ~ 10000.
 
-CLAUDE.md had already recorded that single-frame spacing is unusable (8.7-11.1 m
+The project notes had already recorded that single-frame spacing is unusable (8.7-11.1 m
 for a 10 m cycle, "only 2-3 cycles fit in frame"); this is the same limit, hidden
 behind an artefact that happened to land near the right answer.
 
