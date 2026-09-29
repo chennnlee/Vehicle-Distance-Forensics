@@ -167,7 +167,9 @@ def cmd_predict(args):
         cache = Path(item["depth_cache"])
         samples = []
         for j, fi in enumerate(idx):
-            car = front_car(dets["dets"].get(frames[fi].stem, []), ego_lines(res, j), w, bonnet)
+            lanes = ego_lines(res, j)
+            car = None if (args.require_lanes and len(lanes) < 2) else \
+                front_car(dets["dets"].get(frames[fi].stem, []), lanes, w, bonnet)
             s = dict(j=j, frame_i=fi, t=fi / fps, box=None, dist=None)
             if car is not None:
                 try:
@@ -333,6 +335,9 @@ def main():
         if p.prog.endswith("predict"):
             p.add_argument("--bonnet", action="store_true",
                            help="skip boxes whose bottom lies on our own bonnet (added after the 9/29 seal)")
+            p.add_argument("--require-lanes", action="store_true",
+                           help="no front car unless both ego-lane lines are found; without it the 30-70 %% width "
+                                "fallback can pick a car in the next lane (added after the 9/29 seal)")
     args = ap.parse_args()
     dict(detect=cmd_detect, predict=cmd_predict, score=cmd_score)[args.cmd](args)
 

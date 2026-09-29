@@ -194,8 +194,17 @@ def main():
                 lines[side] = ln
         if wd.get("vp_row"):
             a1.axhline(wd["vp_row"], color="#FBBC04", ls=(0, (6, 4)), lw=1.4)
-        car = front_car(det(img), lines, w, h, bonnet)
-        car_txt = "本車道前方沒有車"
+        # the ego lane's edges: both tracked lines, whether or not they set k. With either edge
+        # missing there is no way to tell which car is in our lane, so no front-car reading is
+        # made (the 30-70 % width fallback picked a car in the next lane on Haisheng 002, t = 10 s).
+        # a window whose crossing row failed the vanishing-row gate has lines that are not the lane
+        geo = {s: wd[s] for s in ("left", "right") if wd.get(s)} if wd.get("vp_row") else {}
+        if len(geo) == 2:
+            car = front_car(det(img), geo, w, h, bonnet)
+            car_txt = "本車道前方沒有車"
+        else:
+            car = None
+            car_txt = "本車道線沒追到,不輸出前車距離"
         if car is not None and depth is not None:
             x0, y0, x1, y1 = car
             cx = (x0 + x1) / 2
@@ -222,9 +231,7 @@ def main():
         for ln in lines.values():
             ys = np.array([wd["vp_row"] + p["vp_margin"] * h, res["det_rows"][1]])
             a2.plot(ln["a"] * ys + ln["b"], ys, color="white", lw=1.2, alpha=0.8)
-        # the rungs only need the lane's edges, so both tracked lines serve even when just one of them
-        # passed the gate that sets k
-        geo = {s: wd[s] for s in ("left", "right") if wd.get(s)}
+        # the rungs use the same lane edges as the front-car choice (geo, above)
         if depth is not None and wd.get("vp_row") and len(geo) == 2:
             dh, dw = depth.shape
             dm = depth * k
