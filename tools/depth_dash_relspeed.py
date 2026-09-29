@@ -118,6 +118,16 @@ def ego_lines(res, j):
             if wd.get(s) and wd.get("vp_row") and s in res.get("lines_used", [])}
 
 
+def lane_edges(res, j):
+    """Both tracked ego-lane lines of the window nearest sample j, whether or not they set k (the
+    demo's rule, 2026-09-30); empty unless both are there and their crossing row passed its gate.
+    Used by `predict --require-lanes`. ego_lines keeps only the lines that set k, so a clip whose k
+    came from one line would never get a front car under that flag."""
+    wd = D.lines_for(dict(windows=res["windows"]), j)
+    geo = {s: wd[s] for s in ("left", "right") if wd.get(s)} if wd.get("vp_row") else {}
+    return geo if len(geo) == 2 else {}
+
+
 def front_car(boxes, lines, w, bonnet_row=None):
     """Nearest box whose bottom centre lies between the ego-lane lines (demo definition).
 
@@ -167,9 +177,11 @@ def cmd_predict(args):
         cache = Path(item["depth_cache"])
         samples = []
         for j, fi in enumerate(idx):
-            lanes = ego_lines(res, j)
-            car = None if (args.require_lanes and len(lanes) < 2) else \
-                front_car(dets["dets"].get(frames[fi].stem, []), lanes, w, bonnet)
+            if args.require_lanes:
+                lanes = lane_edges(res, j)
+                car = front_car(dets["dets"].get(frames[fi].stem, []), lanes, w, bonnet) if lanes else None
+            else:
+                car = front_car(dets["dets"].get(frames[fi].stem, []), ego_lines(res, j), w, bonnet)
             s = dict(j=j, frame_i=fi, t=fi / fps, box=None, dist=None)
             if car is not None:
                 try:
