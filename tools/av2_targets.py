@@ -25,6 +25,10 @@ as are masks below `--min-area-px`.
 Usage:
   python3 tools/av2_targets.py --log data/input/av2/<log> --calib data/output/av2_marking/calib.json \
       --out data/output/av2_depth/targets_<log>.csv
+
+For a log the marking calibration refused, the ego-lane lines can come instead from a sealed
+depth_dash_scale result (`--lanes-json`): the lines of the detection window nearest each
+frame, with that window's line crossing as y_h. Same selection rule otherwise.
 """
 from __future__ import annotations
 
@@ -42,7 +46,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--log", required=True)
-    ap.add_argument("--calib", required=True, help="calib.json from av2_marking_calib.py")
+    ap.add_argument("--calib", default="", help="calib.json from av2_marking_calib.py")
+    ap.add_argument("--lanes-json", default="", help="depth_dash_scale result whose windows give the lanes")
+    ap.add_argument("--device", default=None, help="YOLO device, e.g. cpu (default: ultralytics' choice)")
     ap.add_argument("--frames-name", default="pinhole")
     ap.add_argument("--yolo", default="checkpoints/yolov8m-seg.pt")
     ap.add_argument("--conf", type=float, default=0.4)
@@ -58,17 +64,34 @@ def main():
     from ultralytics import YOLO
 
     log = Path(args.log)
-    cal = {c["log"]: c for c in json.loads(Path(args.calib).read_text())}[log.name]
-    if cal.get("status") != "ok":
-        raise SystemExit(f"{log.name}: marking calibration did not pass ({cal.get('status')})")
-    (la, lb), (ra, rb) = (tuple(cal["lines"][0]["line"]), tuple(cal["lines"][1]["line"]))
-    y_h = cal["y_h"]
+    cal = None
+    if args.lanes_json:
+        dash = json.loads(Path(args.lanes_json).read_text())
 
-    frames = sorted((log / args.frames_name).glob("*.jpg"))[::args.stride]
+        def lanes_at(pos):
+            wd = min(dash["windows"], key=lambda w: abs(w["center"] - pos / dash["step"]))
+            if not (wd.get("left") and wd.get("right") and wd.get("vp_row")):
+                return None
+            return (wd["left"]["a"], wd["left"]["b"]), (wd["right"]["a"], wd["right"]["b"]), wd["vp_row"]
+    else:
+        cal = {c["log"]: c for c in json.loads(Path(args.calib).read_text())}[log.name]
+        if cal.get("status") != "ok":
+            raise SystemExit(f"{log.name}: marking calibration did not pass ({cal.get('status')})")
+        fixed = (tuple(cal["lines"][0]["line"]), tuple(cal["lines"][1]["line"]), cal["y_h"])
+
+        def lanes_at(pos):
+            return fixed
+
+    all_frames = sorted((log / args.frames_name).glob("*.jpg"))
+    frames = all_frames[::args.stride]
     model = YOLO(args.yolo)
     rows = []
-    for fp in frames:
-        res = model.predict(str(fp), verbose=False, conf=args.conf)[0]
+    for pos, fp in zip(range(0, len(all_frames), args.stride), frames):
+        lanes = lanes_at(pos)
+        if lanes is None:
+            continue
+        (la, lb), (ra, rb), y_h = lanes
+        res = model.predict(str(fp), verbose=False, conf=args.conf, device=args.device)[0]
         if res.masks is None:
             continue
         H, W = res.orig_shape
@@ -106,10 +129,11 @@ def main():
         w = csv.DictWriter(f, fieldnames=list(rows[0]))
         w.writeheader()
         w.writerows(rows)
-    d = np.array([cal["A_marking"] / (r["py_max"] - y_h) for r in rows])
     print(f"{log.name}: {len(rows)} targets over {len(frames)} frames")
-    print(f"  marking range at the contact point: median {np.median(d):.1f} m, "
-          f"10-90% {np.percentile(d, 10):.1f}-{np.percentile(d, 90):.1f} m")
+    if cal is not None:
+        d = np.array([cal["A_marking"] / (r["py_max"] - cal["y_h"]) for r in rows])
+        print(f"  marking range at the contact point: median {np.median(d):.1f} m, "
+              f"10-90% {np.percentile(d, 10):.1f}-{np.percentile(d, 90):.1f} m")
     print(f"wrote {args.out}")
 
 
