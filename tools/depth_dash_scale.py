@@ -26,6 +26,19 @@ lane_line_fit, auto_odometer_points, public_dataset_ego_eval) is imported. The o
 project module used is depth_backends (the depth-model wrapper), when a depth map has to
 be computed.
 
+Line-width gate -- added 2026-09-30, after the pre-registered run, and OFF by default, so every
+earlier output is reproduced byte for byte. Why: a line accepted on its own has no cross-check
+(lines_agree needs two lines). Where traffic merges, Taiwan paints the boundary as a 穿越虛線
+(設置規則第 189-1 條: white dashes 1 m long, 2 m apart = a 3 m cycle, 15 or 30 cm wide); taken for a
+10 m lane line it makes k wrong by 3.3x. Its width gives it away with no scale at all: painted width
+over ego-lane width at the same image row (on a flat road one row is one distance, so both shrink
+alike). `--line-width-gate tw` drops a line's cycles, window by window, where that ratio is above
+--max-line-width-ratio; `measure` only records the ratio. Taiwan only: the threshold comes from Taiwan's
+widths; US lane lines are 4-6 in and dotted extensions keep the line's width,
+so it does not transfer (comma2k19, AV1, AV2: `measure` at most). What it cannot catch: a 15 cm
+穿越虛線 on a road whose lane lines are also painted 15 cm (see LINE_WIDTH). Only the scale uses the
+gate; the speed step is unchanged.
+
   python3 tools/depth_dash_scale.py run --frames DIR --fps 29.97 --cycle-m 10 \\
       --depth-cache DIR --band-bottom 0.86 --out result.json
 """
@@ -73,6 +86,41 @@ PARAMS = dict(
     lines_agree=0.10,       # two accepted lines must agree on k within this
     shift_max=0.45,         # speed: largest shift searched, fraction of a cycle
     min_corr=0.5,           # speed: correlation needed to report a reading
+)
+
+# Line-width gate (2026-09-30; used only when run(..., line_width_gate=...) asks for it -- see the module
+# docstring). Everything is a fraction of the ego-lane width at the same row, so no scale is involved.
+LINE_WIDTH = dict(
+    near_frac=0.6,          # rows used: lane width there >= this fraction of the lane width at the band bottom
+    n_rows=16,              # ... this many, evenly spaced (far rows are too narrow to read a 10 cm line)
+    min_lane_frac=0.15,     # ... and only where the ego lane spans >= this fraction of the image width: narrower,
+                            # a 10-15 cm line is < 8-12 px at 1080p and what reads as a sharp stripe there is
+                            # mostly not the line (seen on a web clip whose band ended just below the horizon)
+    se_lane=0.25,           # 1-D white top-hat across the row, this fraction of the lane width long (~0.9 m):
+                            # removes the road surface but keeps any stripe up to ~0.3 m whole
+    search_lane=0.04,       # the stripe's brightest pixel must lie within this fraction of the lane width of the line
+    min_contrast=12.0,      # top-hat peak (grey levels) below this: no paint on this row
+    max_lane=0.2,           # a "stripe" wider than this fraction of the lane is not a line
+    min_px=4.0,             # ... and one narrower than this many pixels cannot be measured
+    max_rise=0.2,           # edge sharpness: mean 25->75 % rise of the two edges <= this x the width, i.e. the
+                            # stripe is >= ~6.7 blur sigmas wide and its half-level width is the paint's (within
+                            # ~3 % on synthetic blurred + sharpened + JPEG stripes; at 0.3 up to +35 %); a
+                            # blur-dominated stripe (far rows, hazy or low-resolution video) reads ~0.3-0.4
+    on_frac=0.5,            # a row lies on a dash when its peak >= this x the on_pctl-th percentile of the peaks
+    on_pctl=90,             # ... of the same line in the same window (rows in the gaps between dashes drop out)
+    min_samples=15,         # a window's line is judged on its own median with at least this many rows on paint,
+                            # otherwise on the clip median of that side
+    max_ratio_tw=0.06,      # Taiwan gate, set from legal widths and measured ratios only (no answer file). The
+                            # first idea, 0.034 (10 cm lane line vs 15 cm 穿越虛線), does not fit the roads: lane
+                            # lines on Taiwan freeways read 0.039-0.054 per clip and line (hs002, hs006, 18 web
+                            # clips; the 0.054 is a hazy wide-angle camera), i.e. painted ~15 cm rather than the
+                            # 10 cm of 第 182 條, so 0.034 would refuse every one of them. 穿越虛線 read 0.07-0.11
+                            # (hs002 and 7 web clips, checked by eye on masked frames). 0.06 = the geometric
+                            # middle of 15 and 30 cm over a 3.5 m lane (0.212 m / 3.5 m). The estimator does
+                            # not read wide: US 4-in lines read 0.027
+                            # (comma2k19; 0.1016 / 3.66 = 0.028). Not caught: a 15 cm 穿越虛線 (reads like a lane
+                            # line). Also over: windows whose lane pair is wrong (a phantom line inside the lane
+                            # shrinks the lane width) -- their cycles are dropped too, which does no harm.
 )
 
 
@@ -316,6 +364,147 @@ def dash_cycles(grid, prof, cycle_m, duty, p=PARAMS):
     return out
 
 
+# ------------------------------------------------------------------ 3b. line width (2026-09-30, off by default)
+
+def _level_edge(tp, i, step, level):
+    """From index i (tp[i] >= level) walk by step while tp stays >= level; sub-pixel position where it
+    first drops below, or None at the end of the profile."""
+    n = len(tp)
+    while 0 <= i + step < n and tp[i + step] >= level:
+        i += step
+    if not 0 <= i + step < n:
+        return None
+    a, b = tp[i], tp[i + step]
+    return i + step * (a - level) / (a - b)
+
+
+def stripe_width(gray, y, x_line, slope, lane_px, p=LINE_WIDTH):
+    """Width in pixels of the bright stripe crossing image row y near x_line.
+
+    Rows y-1, y, y+1 are averaged after shifting each along the line (slope = dx/dy), and a 1-D white
+    top-hat about 0.9 m of road long removes the road surface. The stripe is the run around the
+    brightest pixel near the line; its level is the median over that run (not the peak, which
+    in-camera sharpening overshoots at the edges), and the width is read where the top-hat crosses
+    half that level, with sub-pixel edges. Half level because a symmetric blur moves neither edge of
+    a stripe that is wide against the blur -- which is then checked on the same profile: the 25 -> 75 %
+    rise of the two edges, over the width, must stay <= max_rise (a blur-dominated stripe is bell
+    shaped, rise/width ~0.3-0.4, and its half width is the blur's, not the paint's).
+    Along a row a flat road is at one distance, so this width over the lane width at the same row is
+    the painted width over the lane width.
+    Returns None if the row cannot be read, (peak, None, None, None) if it holds no stripe that can
+    be measured, else (peak, width_px, centre_x, rise_px).
+    """
+    h, w = gray.shape
+    se = _odd(max(9, int(round(p["se_lane"] * lane_px))))
+    search = max(4.0, p["search_lane"] * lane_px)
+    half = int(search + se + 4)
+    x0, x1 = int(np.floor(x_line - half)), int(np.ceil(x_line + half)) + 1
+    if x0 < 0 or x1 > w or y < 1 or y > h - 2:
+        return None
+    xs = np.arange(x0, x1, dtype=np.float64)
+    grid = np.arange(w, dtype=np.float64)
+    prof = sum(np.interp(xs + slope * d, grid, gray[y + d].astype(np.float64)) for d in (-1, 0, 1)) / 3
+    prof = prof.astype(np.float32).reshape(1, -1)
+    tp = (prof - cv2.morphologyEx(prof, cv2.MORPH_OPEN, np.ones((1, se), np.uint8))).ravel().astype(np.float64)
+    near = np.flatnonzero(np.abs(xs - x_line) <= search)
+    j = int(near[np.argmax(tp[near])])
+    peak = float(tp[j])
+    if peak < p["min_contrast"]:
+        return peak, None, None, None
+    lo, hi = _level_edge(tp, j, -1, peak / 2), _level_edge(tp, j, 1, peak / 2)
+    if lo is None or hi is None:
+        return peak, None, None, None
+    level = float(np.median(tp[int(np.ceil(lo)): int(np.floor(hi)) + 1]))
+    c = int(round((lo + hi) / 2))
+    if level < p["min_contrast"] or tp[c] < 0.75 * level:
+        return peak, None, None, None
+    e = {f: (_level_edge(tp, c, -1, f * level), _level_edge(tp, c, 1, f * level)) for f in (0.25, 0.5, 0.75)}
+    if any(v is None for pair in e.values() for v in pair):
+        return peak, None, None, None
+    width = float(e[0.5][1] - e[0.5][0])
+    rise = ((e[0.75][0] - e[0.25][0]) + (e[0.25][1] - e[0.75][1])) / 2
+    if not p["min_px"] <= width <= p["max_lane"] * lane_px or rise > p["max_rise"] * width:
+        return peak, None, None, None
+    return peak, width, float(x0 + (e[0.5][0] + e[0.5][1]) / 2), float(rise)
+
+
+def frame_line_widths(gray, left, right, vp_row, y_bottom, p=LINE_WIDTH):
+    """(side, row, painted width / ego-lane width, peak) on the near rows of one frame.
+
+    Near rows: from the band bottom up to where the lane is near_frac of its bottom width. The lane
+    width is right x - left x of the two tracked lines at the same row; it is only the denominator of
+    a ratio here, never a scale.
+    """
+    y_hi = int(y_bottom) - 2
+    y_lo = vp_row + p["near_frac"] * (y_hi - vp_row)
+    out = []
+    if y_hi - y_lo < 4:
+        return out
+    for y in np.unique(np.round(np.linspace(y_lo, y_hi, p["n_rows"])).astype(int)):
+        xl, xr = left["a"] * y + left["b"], right["a"] * y + right["b"]
+        lane = xr - xl
+        if lane < max(40, p["min_lane_frac"] * gray.shape[1]):
+            continue
+        for side, ln, x in (("left", left, xl), ("right", right, xr)):
+            r = stripe_width(gray, int(y), x, ln["a"], lane, p)
+            if r is not None and r[1] is not None:
+                out.append((side, int(y), r[1] / lane, r[0]))
+    return out
+
+
+def line_width_summary(rows, windows, max_ratio=None, p=LINE_WIDTH):
+    """Painted width / ego-lane width per line and per detection window, and what the gate drops.
+
+    rows     dicts n, win, side, y, ratio, peak (frame_line_widths, tagged with sample and window)
+    windows  centres of the windows that gave a lane pair
+    A row counts when it lies on a dash: peak >= max(min_contrast, on_frac x the on_pctl-th percentile
+    of the peaks of that line in that window). Gate (max_ratio not None): a window's line is judged on
+    its own median when it has min_samples such rows, otherwise on the clip median of that side; a side
+    with no such row anywhere is unverified. Over max_ratio, or unverified: that side's cycles in that
+    window are not used for the scale ("excluded" lists [window, side]).
+    """
+    out = dict(max_ratio=max_ratio, sides={}, excluded=[])
+    for side in ("left", "right"):
+        by = {}
+        for r in rows:
+            if r["side"] == side:
+                by.setdefault(r["win"], []).append(r)
+        kept, per_win = [], {}
+        for win, grp in by.items():
+            pk = np.array([r["peak"] for r in grp])
+            thr = max(p["min_contrast"], p["on_frac"] * float(np.percentile(pk, p["on_pctl"])))
+            per_win[win] = [r["ratio"] for r in grp if r["peak"] >= thr]
+            kept += per_win[win]
+        e = dict(n=len(kept))
+        if kept:
+            k = np.array(kept)
+            med = float(np.median(k))
+            q1, q3 = np.percentile(k, [25, 75])
+            e.update(median=round(med, 5), iqr_rel=round(float((q3 - q1) / med), 4),
+                     p10=round(float(np.percentile(k, 10)), 5), p90=round(float(np.percentile(k, 90)), 5))
+        judged = {w: float(np.median(q)) for w, q in per_win.items() if len(q) >= p["min_samples"]}
+        e["windows_judged"] = len(judged)
+        if judged:
+            e["window_median_p5_p95"] = [round(float(x), 5) for x in np.percentile(list(judged.values()), [5, 95])]
+        if max_ratio is not None:
+            over = fallback = 0
+            for w in windows:
+                if w in judged:
+                    bad = judged[w] > max_ratio
+                    over += bad
+                else:
+                    fallback += 1
+                    bad = not kept or e["median"] > max_ratio
+                if bad:
+                    out["excluded"].append([w, side])
+            e.update(windows_over=over, windows_fallback=fallback,
+                     verdict="unverified" if not kept else ("over" if e["median"] > max_ratio else "lane line"))
+        e["windows"] = [[w, len(per_win.get(w, [])), None if w not in judged else round(judged[w], 5)]
+                        for w in windows]
+        out["sides"][side] = e
+    return out
+
+
 # ------------------------------------------------------------------ 4. speed
 
 def profile_shift(g1, p1, g2, p2, smax, dz, min_corr):
@@ -345,7 +534,13 @@ def profile_shift(g1, p1, g2, p2, smax, dz, min_corr):
 # ------------------------------------------------------------------ driver
 
 def run(frames_dir, fps, cycle_m, depth_cache, band_bottom, step=2, model="da3_metric",
-        duty_ratio=0.4, p=PARAMS, fx=None):
+        duty_ratio=0.4, p=PARAMS, fx=None, line_width_gate="off", max_line_width_ratio=None):
+    """line_width_gate (2026-09-30): "off" (default, the pre-registered behaviour, output unchanged),
+    "measure" (record painted width / lane width per line, drop nothing -- for roads outside Taiwan),
+    "tw" (Taiwan: also drop a line's cycles where the ratio is over max_line_width_ratio, default
+    LINE_WIDTH["max_ratio_tw"]). See the module docstring."""
+    if line_width_gate not in ("off", "measure", "tw"):
+        raise ValueError(f"line_width_gate {line_width_gate!r}: off, measure or tw")
     frames = list_frames(Path(frames_dir))
     idx = list(range(0, len(frames), step))
     track = track_lines(frames, idx, fps, band_bottom, p)
@@ -369,6 +564,7 @@ def run(frames_dir, fps, cycle_m, depth_cache, band_bottom, step=2, model="da3_m
     per_frame = []     # n -> {"left": (grid, prof), "right": ...}
     periods = []
     duty = duty_ratio
+    lw_rows = []       # line-width samples, only when line_width_gate is not "off"
     for n, i in enumerate(idx):
         wd = lines_for(track, n)
         if wd["vp_row"] is None:
@@ -384,6 +580,9 @@ def run(frames_dir, fps, cycle_m, depth_cache, band_bottom, step=2, model="da3_m
             d = load_depth(cache, frames[i], backend, fx)
         g = cv2.imread(str(frames[i]), cv2.IMREAD_GRAYSCALE)
         th = white_tophat(g, track["tophat_px"])
+        if line_width_gate != "off":
+            lw_rows += [dict(n=n, win=wd["center"], side=sd, y=y, ratio=q, peak=pk)
+                        for sd, y, q, pk in frame_line_widths(g, wd["left"], wd["right"], wd["vp_row"], y1)]
         rows = np.arange(y1 - 1, int(wd["vp_row"] + p["vp_margin"] * h), -1)
         got = {}
         for side in ("left", "right"):
@@ -397,10 +596,31 @@ def run(frames_dir, fps, cycle_m, depth_cache, band_bottom, step=2, model="da3_m
                 periods.append(dict(n=n, side=side, period=cyc, z_near=z0))
         per_frame.append(got)
 
+    lw = None
+    if line_width_gate != "off":
+        thr = None
+        if line_width_gate == "tw":
+            thr = LINE_WIDTH["max_ratio_tw"] if max_line_width_ratio is None else float(max_line_width_ratio)
+        lw = line_width_summary(lw_rows, [wd["center"] for wd in track["windows"] if wd["vp_row"] is not None],
+                                thr)
+        lw.update(mode=line_width_gate, params=LINE_WIDTH,
+                  note="2026-09-30 addition. ratio = painted width / ego-lane width at the same row (near rows), "
+                       "scale-free. Gate for Taiwan roads only (lane line 第 182 條, 穿越虛線 第 189-1 條 15/30 cm); "
+                       "US lane lines are 4-6 in and dotted extensions keep the line's width, so outside Taiwan "
+                       "the ratio is only recorded (mode 'measure').")
+        if thr is not None:
+            bad = {tuple(x) for x in lw["excluded"]}
+            lw["cycles_dropped"] = {sd: sum(1 for x in periods if x["side"] == sd
+                                            and (lines_for(track, x["n"])["center"], sd) in bad)
+                                    for sd in ("left", "right")}
+            periods = [x for x in periods if (lines_for(track, x["n"])["center"], x["side"]) not in bad]
+
     res = dict(params=p, cycle_m=L, fps=fps, step=step, model=model, n_frames=len(frames),
                frames_dir=str(frames_dir), band_bottom=band_bottom,
                windows=track["windows"], det_rows=track["det_rows"], tophat_px=track["tophat_px"],
                periods=periods)
+    if lw is not None:
+        res["line_width"] = lw
     blk = max(1, int(round(p["ci_block_s"] * fps / step)))
     rng = np.random.default_rng(0)
     sides = {}
@@ -429,6 +649,8 @@ def run(frames_dir, fps, cycle_m, depth_cache, band_bottom, step=2, model="da3_m
     if not acc:
         res.update(status="refused", reason="no line passed: " + "; ".join(
             f"{sd} n={e['n']} CI±{e.get('ci_half', float('nan')):.1%}" for sd, e in sides.items()))
+        if lw is not None and "cycles_dropped" in lw:
+            res["reason"] += f"; line-width gate dropped cycles {lw['cycles_dropped']}"
         return res
     ks = [sides[sd]["k"] for sd in acc]
     if max(ks) / min(ks) - 1 > p["lines_agree"]:
@@ -477,9 +699,15 @@ def main():
     r.add_argument("--model", default="da3_metric")
     r.add_argument("--step", type=int, default=2, help="frame stride for depth and speed")
     r.add_argument("--out", required=True)
+    r.add_argument("--line-width-gate", choices=("off", "measure", "tw"), default="off",
+                   help="2026-09-30, default off (= the pre-registered run). tw: Taiwan roads only -- do not use a "
+                        "line's cycles where painted width / lane width is over --max-line-width-ratio (a 穿越虛線, "
+                        "設置規則第 189-1 條). measure: record the ratio only (use outside Taiwan, e.g. comma2k19/AV1/AV2)")
+    r.add_argument("--max-line-width-ratio", type=float, default=LINE_WIDTH["max_ratio_tw"],
+                   help="threshold of --line-width-gate tw (default %(default)s)")
     args = ap.parse_args()
     res = run(args.frames, args.fps, args.cycle_m, args.depth_cache, args.band_bottom, args.step, args.model,
-              args.duty)
+              args.duty, line_width_gate=args.line_width_gate, max_line_width_ratio=args.max_line_width_ratio)
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(json.dumps(res, indent=1))
     nvp = sum(1 for wd in res["windows"] if wd["vp_row"] is not None)
@@ -488,6 +716,12 @@ def main():
     for sd, e in res.get("sides", {}).items():
         print(f"  {sd}: n={e['n']} k={e.get('k')} spread={e.get('spread')} CI±{e.get('ci_half')} "
               f"{'accepted' if e['accepted'] else 'refused'}")
+    if "line_width" in res:
+        lw = res["line_width"]
+        print(f"  line width / lane width ({lw['mode']}, max {lw['max_ratio']}, cycles dropped {lw.get('cycles_dropped')}):")
+        for sd, e in lw["sides"].items():
+            print(f"    {sd}: median {e.get('median')} IQR/median {e.get('iqr_rel')} rows {e['n']} "
+                  f"windows judged {e['windows_judged']} over {e.get('windows_over')} {e.get('verdict', '')}")
     if res.get("speeds") is not None:
         print(f"  speed median {res.get('speed_median_kmh')}  coverage {res.get('speed_coverage'):.1%}")
     if res["status"] != "ok":
