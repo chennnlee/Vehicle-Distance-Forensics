@@ -6,14 +6,14 @@
 **為什麼在版控裡**:這些程式原本住在 `~/tmp/report_build/` 與 `~/tmp/pptx_build/`,
 不在版控內。2026-08-17 一次誤判(把兩個資料夾一起 `ls` 又被 `head` 截斷)讓人以為
 `build_report.py` 已經隨目錄消失,而事實上「輸出還在、產生器不見了」這個情境是真的會發生的
-——`~/tmp/pptx_build/assets` 裡的圖確實有一份是舊 scratchpad 產的、路徑已失效。
+——`~/tmp/pptx_build/assets` 裡的圖確實有一份是舊的臨時目錄產的、路徑已失效。
 產生器是真正的資產,所以搬進來。
 
 | 檔案 | 產出 |
 |---|---|
 | `build_report.py` | `data/output/report_draft/成果報告草稿_<日期>.docx`(A4、標楷體正文、微軟正黑體標題);現行輸出 `成果報告草稿_20260916b.docx`(13 表 17 圖) |
 | `gen.js` | ⚠ **歷史快照,不要重跑後對外使用**(含循環的 0.4 km/h,見表下說明)。18 頁完整專案簡報(2026-07-12) |
-| `gen_progress.js` | ⚠ **歷史快照,不要重跑後對外使用**(含循環的 0.4 km/h);**圖檔已消失,無法重跑**(圖路徑指向已消失的 scratchpad,輸出 `專題進度報告_20260803.pptx` 仍在)。進度報告簡報(2026-08-03,教授看過並給四點指示的那份) |
+| `gen_progress.js` | ⚠ **歷史快照,不要重跑後對外使用**(含循環的 0.4 km/h);**圖檔已消失,無法重跑**(原圖檔在已消失的臨時目錄,輸出 `專題進度報告_20260803.pptx` 仍在)。進度報告簡報(2026-08-03,教授看過並給四點指示的那份) |
 | `gen_progress2.js` | ⚠ **歷史快照,不要重跑後對外使用**(含循環的 0.4 km/h、BrnoCompSpeed 待辦)。進度報告簡報(2026-08-17,逐項答覆四點指示) |
 | `gen_progress3.js` | ⚠ **歷史快照,不要重跑後對外使用**(含循環的 0.4 km/h、09-16 前的舊係數 0.831/0.886、BrnoCompSpeed 待辦)。進度報告簡報(2026-08-19,當時的口試/繳交版,21 張) —— 8/17 的內容全留(教授還沒看過),再加跨車輛驗證、第三種路類、SHARP 稽核、距離自校與前後對照 |
 | `gen_point1.js` | ⚠ **歷史快照,不要重跑後對外使用**(含循環的 0.4 km/h,而且是封面結論)。單一主題簡報(2026-08-19):偵測器比較,回應教授第 ① 點。刻意與進度報告不同調——一頁一個想法、字少、表格當主角 |
@@ -99,7 +99,7 @@ cp data/output/comma2k19_radar_eval/radar_eval.png ~/tmp/pptx_build/assets/
 
 2026-08-17 新增的四張圖(`fig_odo_fix.png`、`fig_position_step.png`、`fig_roadclass.jpg`、
 `fig_xt_daynight.png`)由 comma2k19 的評估輸出產生,重跑方式見
-`data/output/comma2k19_eval/README.md` 第六節與該次的 scratchpad 腳本。
+`data/output/comma2k19_eval/README.md` 第六節與該次的臨時腳本。
 
 ## 檢查產出
 

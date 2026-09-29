@@ -3,8 +3,8 @@
 // 所以方法說明不重複,改成「四點逐項答覆 + 過程中發現自己診斷錯了 + 修好」的結構。
 const PptxGenJS = require("pptxgenjs");
 
-// 圖存在 assets/ 而不是 scratchpad：前一份 gen_progress.js 的圖路徑指向已消失的
-// scratchpad,現在無法重跑。assets/ 隨這個資料夾一起留著。
+// 圖存在 assets/ 而不是臨時目錄：前一份 gen_progress.js 的圖放在已消失的
+// 臨時目錄,現在無法重跑。assets/ 隨這個資料夾一起留著。
 const F = process.env.REPORT_ASSETS || "/home/s11244/tmp/pptx_build/assets";
 const INK = "0B0B0B", INK2 = "52514E", BLUE = "2A78D6", ORANGE = "EB6834",
       GREEN = "1BAF7A", RULE = "D8D7D2";

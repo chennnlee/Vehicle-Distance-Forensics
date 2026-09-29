@@ -58,7 +58,7 @@
   (qz1130221 的 f0012、`docs/CASE_PARAMETERS.md` 的 f0270、f2101、f0900、f0001),或只註明超過 9999 幀的片才需要 `%05d`。
   通則裡順便寫「重建後先核對幀數」(最便宜的自檢):由各基底資料夾 `original_clip_h264.mp4` 重建,dc002 600、dc003 1798、dc006 1801、dc007 330、dc008 600 幀
   (hs005 536、wow001 3570 見各自 README)。出處:2026-09-18 盤點;`git grep -n 'f%04d'`;幀數為專案筆記的重建紀錄(本機,不在版控)。
-- **A5 15 案碼表迴歸只剩案表,跑法不在 repo**:幀重建、人工真值讀取、評分與新舊比對(`rebuild_frames.py`、`manual_truth.py`、`odo_regress.py`、`odo_compare.py`)當初放在 scratchpad,
+- **A5 15 案碼表迴歸只剩案表,跑法不在 repo**:幀重建、人工真值讀取、評分與新舊比對(`rebuild_frames.py`、`manual_truth.py`、`odo_regress.py`、`odo_compare.py`)當初放在臨時目錄,
   已隨 `/tmp` 消失,訊號快取 `/tmp/odo_sig_cache/` 亦同;repo 只有案表 `tools/odometer_regression_cases.py`。任何改碼表邏輯的工作(D1)都要先過這組迴歸。
   下一步:寫成 `tools/` 下的一支工具(重建影格 → 新舊碼同點位 → 逐幀比對)。人工真值解析可沿用 `tools/haisheng_manual_truth.py`(版面只在 20251230 五案驗證過,20251029 批要先核對),
   只剩幀重建、評分與比對要新寫;素材路徑與 B4 一起定。2026-08-02 的 before 基準線(七案逐案 MAE,口徑未記錄)記在 `docs/ODOMETER_DESIGN.md` 第 1.8 節,新評分器先拿它對量級。
