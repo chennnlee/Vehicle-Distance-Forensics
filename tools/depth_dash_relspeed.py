@@ -118,10 +118,18 @@ def ego_lines(res, j):
             if wd.get(s) and wd.get("vp_row") and s in res.get("lines_used", [])}
 
 
-def front_car(boxes, lines, w):
-    """Nearest box whose bottom centre lies between the ego-lane lines (demo definition)."""
+def front_car(boxes, lines, w, bonnet_row=None):
+    """Nearest box whose bottom centre lies between the ego-lane lines (demo definition).
+
+    Added 2026-09-30, after the sealed 9/29 run: a box whose bottom is on our own bonnet is
+    our own bonnet (YOLO labels it "car" on comma2k19; seg10 had it as the front car in 105
+    of 295 samples). bonnet_row is the top of the never-changing rows (D.static_rows), so no
+    answer is involved. None keeps the sealed behaviour.
+    """
     best = None
     for x0, y0, x1, y1, _, _ in boxes:
+        if bonnet_row is not None and y1 >= bonnet_row - 2:
+            continue
         cx, cy = (x0 + x1) / 2, y1
         L, R = lines.get("left"), lines.get("right")
         lo = L["a"] * cy + L["b"] if L else PARAMS["lane_fallback"][0] * w
@@ -153,12 +161,13 @@ def cmd_predict(args):
         dets = json.loads((OUT / f"dets_{key}.json").read_text())
         frames = D.list_frames(Path(item["frames"]))
         h, w = cv2.imread(str(frames[0])).shape[:2]
+        bonnet = D.static_rows(frames)[0] if args.bonnet else None
         k, fps, step = res["k"], res["fps"], res["step"]
         idx = list(range(0, len(frames), step))
         cache = Path(item["depth_cache"])
         samples = []
         for j, fi in enumerate(idx):
-            car = front_car(dets["dets"].get(frames[fi].stem, []), ego_lines(res, j), w)
+            car = front_car(dets["dets"].get(frames[fi].stem, []), ego_lines(res, j), w, bonnet)
             s = dict(j=j, frame_i=fi, t=fi / fps, box=None, dist=None)
             if car is not None:
                 try:
@@ -321,6 +330,9 @@ def main():
         p.add_argument("--keys", nargs="+", default=list(KEYS))
         if p is not d:
             p.add_argument("--model", default="da3_metric")
+        if p.prog.endswith("predict"):
+            p.add_argument("--bonnet", action="store_true",
+                           help="skip boxes whose bottom lies on our own bonnet (added after the 9/29 seal)")
     args = ap.parse_args()
     dict(detect=cmd_detect, predict=cmd_predict, score=cmd_score)[args.cmd](args)
 

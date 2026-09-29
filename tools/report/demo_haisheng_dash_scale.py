@@ -4,8 +4,12 @@
 Everything drawn comes from the sealed result of tools/run_depth_dash_scale.py (lines,
 scale k, per-pair speeds) plus the cached depth maps; the front car is found with YOLO
 (the detector all distance validations used), whose box bottom is taken as the contact point.
+A box whose bottom lies on the car's own bonnet is not a front car: YOLO labels the bonnet
+"car" on comma2k19, and the first demos framed it at 2.2 m. The bonnet line is the top of
+the rows that never change over the clip (depth_dash_scale.static_rows), no answer involved.
 The manual frame-count report is drawn only if --truth is given, and only after the
-results were sealed (the script checks the seal).
+results were sealed (the script checks the seal). For comma2k19 the truth comes from
+tools/c2k19_extract.py (CAN speed; the nearest radar return within 1.8 m of the lane centre).
 
   python3 tools/report/demo_haisheng_dash_scale.py --key hs1230car_002 --truth
 """
@@ -71,10 +75,12 @@ def detector():
     return run
 
 
-def front_car(boxes, lines, w, h):
-    """The nearest box whose bottom centre lies between the ego-lane lines."""
+def front_car(boxes, lines, w, h, bonnet_row=None):
+    """The nearest box whose bottom centre lies between the ego-lane lines, and not on the bonnet."""
     best = None
     for (x0, y0, x1, y1), s in boxes:
+        if bonnet_row is not None and y1 >= bonnet_row - 2:
+            continue                     # a ground contact on our own bonnet is our own bonnet
         cx, cy = (x0 + x1) / 2, y1
         L, R = lines.get("left"), lines.get("right")
         lo = L["a"] * cy + L["b"] if L else 0.3 * w
@@ -98,16 +104,24 @@ C2K = {"c2k19_seg10": "b0c9d2329ad1606b_2018-07-30--13-44-30_10",
        "c2k19_seg21": "b0c9d2329ad1606b_2018-08-15--09-01-03_21"}
 
 
-def c2k19_truth(key):
-    """Radar distance at the scored target pixel, and CAN speed, per frame index (0-based)."""
+def c2k19_truth(key, lane_half_m=1.8):
+    """CAN speed (km/h) and the nearest in-lane radar return (m) per frame index (0-based),
+    from tools/c2k19_extract.py truth output."""
     import csv
-    rows = csv.DictReader(open(ROOT / f"data/output/depth_benchmark/paired_{C2K[key]}.csv"))
-    out = {}
-    for r in rows:
-        out[int(r["frame_idx"].lstrip("f")) - 1] = dict(px=float(r["px"]), py=float(r["py"]),
-                                                          radar=float(r["radar_range_m"]),
-                                                          can=float(r["can_ego_kmh"]))
+    d = ROOT / "data/output/c2k19_truth" / C2K[key]
+    out = {int(r["frame_idx"]): dict(can=float(r["can_speed_ms"]) * 3.6, radar=None)
+           for r in csv.DictReader(open(d / "ego.csv"))}
+    for r in csv.DictReader(open(d / "radar.csv")):
+        fi, dist = int(r["frame_idx"]), float(r["d_rel_m"])
+        if abs(float(r["y_rel_m"])) <= lane_half_m and fi in out:
+            if out[fi]["radar"] is None or dist < out[fi]["radar"]:
+                out[fi]["radar"] = dist
     return out
+
+
+# commits were reworded after sealing; seal.json keeps the old ids (docs/TERRY_RESEARCH_RECORD.md §11)
+REWORDED = {"7e1aa88": "25dacd2", "4975586": "2e6c7c5", "86ab990": "bf94bb1", "1fdbb24": "9b7c087",
+            "e87e279": "2b1a3b6"}
 
 
 def main():
@@ -117,6 +131,8 @@ def main():
     ap.add_argument("--depth-cache", default="")
     ap.add_argument("--truth", action="store_true", help="draw the manual report (allowed only after sealing)")
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--preview-t", type=float, default=None,
+                    help="render only the frame nearest this time (s) to preview_<t>s.png, no video")
     args = ap.parse_args()
     plt = fonts()
     res, seal = sealed(args.key)
@@ -127,7 +143,7 @@ def main():
     k, L = res["k"], res["cycle_m"]
     p = res["params"]
     fps, step, stride = res["fps"], res["step"], res.get("stride", 1)
-    _, boxes_osd = D.static_rows(frames)
+    bonnet, boxes_osd = D.static_rows(frames)
     h, w = cv2.imread(str(frames[0])).shape[:2]
     idx = list(range(0, len(frames), step))
     speeds = {s["frame_i"]: s for s in res["speeds"]}
@@ -144,7 +160,11 @@ def main():
     tdir.mkdir(parents=True)
     prev = None
     backend = None
-    for j in range(min(len(idx), args.limit) if args.limit else len(idx)):
+    if args.preview_t is not None:
+        js = [int(np.argmin([abs(i / fps - args.preview_t) for i in idx]))]
+    else:
+        js = range(min(len(idx), args.limit) if args.limit else len(idx))
+    for j in js:
         fi = idx[j]
         img = D.black_out(cv2.imread(str(frames[fi])), boxes_osd)
         wd = D.lines_for(dict(windows=res["windows"]), j)
@@ -159,7 +179,9 @@ def main():
         title = f"comma2k19 {args.key}(公開資料集,無 OSD)" if is_c2k else f"海盛 {args.key}(原始影片,OSD 已塗黑)"
         fig.text(0.01, 0.985, f"{title}  影格 {fi * stride + 1}  t = {fi / fps:5.2f} s",
                  fontsize=16, fontweight="bold", va="top")
-        fig.text(0.99, 0.985, f"結果封存於 {seal['sealed_utc']}(commit {seal['git_commit'][:7]})"
+        c7 = seal["git_commit"][:7]
+        c7 = f"{REWORDED[c7]};封存檔記的是改寫前的 {c7}" if c7 in REWORDED else c7
+        fig.text(0.99, 0.985, f"結果封存於 {seal['sealed_utc']}(commit {c7})"
                  + (",之後才開啟真值" if (segs or c2k) else ""), fontsize=11, ha="right", va="top", color="#555")
         a1 = fig.add_axes([0.005, 0.40, 0.49, 0.53])
         a1.imshow(img[..., ::-1])
@@ -172,7 +194,7 @@ def main():
                 lines[side] = ln
         if wd.get("vp_row"):
             a1.axhline(wd["vp_row"], color="#FBBC04", ls=(0, (6, 4)), lw=1.4)
-        car = front_car(det(img), lines, w, h)
+        car = front_car(det(img), lines, w, h, bonnet)
         car_txt = "本車道前方沒有車"
         if car is not None and depth is not None:
             x0, y0, x1, y1 = car
@@ -187,18 +209,57 @@ def main():
                     bbox=dict(fc=C_CAR, ec="none", pad=2))
             car_txt = f"前車距離  = k × 模型讀值 = {k:.3f} × {zm:.2f} = {k * zm:.1f} m"
             tr = c2k.get(fi)
-            if tr and abs(tr["px"] - cx) < 40 and abs(tr["py"] - y1) < 40:
+            if tr and tr["radar"]:
                 err = (k * zm - tr["radar"]) / tr["radar"] * 100
                 car_txt += f"  |  雷達 {tr['radar']:.1f} m({err:+.1f}%)"
         a1.set_title("① 追蹤虛線(綠)與前車(橘)", fontsize=14, fontweight="bold")
         a1.axis("off")
+        # ② the same picture with distance rungs: where depth x k along the ego-lane centre crosses
+        # 10/20/30/40/60 m (road pixels only; rows on the front car skipped). A small depth map shows
+        # where the numbers come from, with the overlay boxes left blank so no text imprint shows.
         a2 = fig.add_axes([0.505, 0.40, 0.49, 0.53])
-        if depth is not None:
-            a2.imshow(depth * k, cmap="turbo_r", vmin=3, vmax=60, extent=(0, w, h, 0))
+        a2.imshow(img[..., ::-1])
         for ln in lines.values():
             ys = np.array([wd["vp_row"] + p["vp_margin"] * h, res["det_rows"][1]])
-            a2.plot(ln["a"] * ys + ln["b"], ys, color="white", lw=1.5)
-        a2.set_title("② 深度模型 da3_metric × k(公尺)", fontsize=14, fontweight="bold")
+            a2.plot(ln["a"] * ys + ln["b"], ys, color="white", lw=1.2, alpha=0.8)
+        # the rungs only need the lane's edges, so both tracked lines serve even when just one of them
+        # passed the gate that sets k
+        geo = {s: wd[s] for s in ("left", "right") if wd.get(s)}
+        if depth is not None and wd.get("vp_row") and len(geo) == 2:
+            dh, dw = depth.shape
+            dm = depth * k
+            prof = []
+            for y in range(int(min(res["det_rows"][1], bonnet - 3)), int(wd["vp_row"] + p["vp_margin"] * h), -2):
+                xa, xb = sorted(geo[s]["a"] * y + geo[s]["b"] for s in geo)
+                c0, c1 = xa + 0.3 * (xb - xa), xb - 0.3 * (xb - xa)
+                if car is not None and car[1] <= y <= car[3] and not (c1 < car[0] or c0 > car[2]):
+                    continue
+                yy = int(y * dh / h)
+                strip = dm[yy, max(0, int(c0 * dw / w)): max(int(c0 * dw / w) + 1, int(c1 * dw / w))]
+                prof.append((y, float(np.median(strip)), xa, xb))
+            last_y = None
+            for target in (10, 20, 30, 40, 60):
+                hit = next((q for q in prof if q[1] >= target), None)
+                if hit:
+                    y, _, xa, xb = hit
+                    if last_y is not None and last_y - y < 0.03 * h:      # too close to the last rung to read
+                        continue
+                    last_y = y
+                    a2.plot([xa, xb], [y, y], color="white", lw=2.2)
+                    a2.text(xb + 10, y, f"{target} m", color="white", fontsize=12, fontweight="bold", va="center",
+                            bbox=dict(fc="black", ec="none", alpha=0.5, pad=1.5))
+        if depth is not None:
+            dh, dw = depth.shape
+            dshow = (depth * k).astype(float)
+            for bx0, by0, bx1, by1 in boxes_osd:
+                dshow[int(by0 * dh / h): int(by1 * dh / h) + 1, int(bx0 * dw / w): int(bx1 * dw / w) + 1] = np.nan
+            ins = a2.inset_axes([0.66, 0.66, 0.33, 0.33])
+            ins.imshow(dshow, cmap="turbo_r", vmin=3, vmax=60)
+            ins.text(0.03, 0.95, "深度圖(紅近、藍遠)", transform=ins.transAxes, fontsize=9, color="white", va="top",
+                     bbox=dict(fc="black", ec="none", alpha=0.5, pad=1))
+            ins.set_xticks([])
+            ins.set_yticks([])
+        a2.set_title("② 深度模型 × k 換算成的距離刻度", fontsize=14, fontweight="bold")
         a2.axis("off")
         # the ruler: metric profile now and one step earlier
         a3 = fig.add_axes([0.05, 0.07, 0.40, 0.26])
@@ -242,7 +303,8 @@ def main():
             ours, _, _ = seg_speed(res, sg["f_start"], sg["f_end"])
             if ours is not None and tb <= fi / fps + 1e-9:
                 a4.plot([ta, tb], [ours] * 2, color=C_OURS, lw=3.5)
-                a4.text(tb, ours, f" {ours - sg['speed_kmh']:+.1f}", color=C_OURS, fontsize=9, va="center")
+                a4.text((ta + tb) / 2, max(ours, sg["speed_kmh"]) + 0.015 * ymax, f"{ours - sg['speed_kmh']:+.1f}",
+                        color=C_OURS, fontsize=9, ha="center", va="bottom")
         if c2k:
             ts = sorted(c2k)
             a4.plot([f / fps for f in ts], [c2k[f]["can"] for f in ts], color=C_TRUTH, lw=2, label="CAN 車速(真值)")
@@ -264,6 +326,11 @@ def main():
         fig.text(0.51, 0.355, car_txt, fontsize=13, color=C_CAR, fontweight="bold")
         fig.savefig(tdir / f"{j:04d}.png", dpi=100)
         plt.close(fig)
+        if args.preview_t is not None:
+            dst = OUT / args.key / f"preview_{args.preview_t:g}s.png"
+            shutil.copy(tdir / f"{j:04d}.png", dst)
+            print("wrote", dst)
+            return
         if (j + 1) % 50 == 0:
             print(f"rendered {j + 1}/{len(idx)}", flush=True)
     mp4 = OUT / f"demo_{args.key}.mp4"
