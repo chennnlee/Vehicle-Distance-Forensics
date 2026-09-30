@@ -100,6 +100,47 @@ def cmd_track(a):
     print("wrote", a.out)
 
 
+
+def cmd_retrack(a):
+    """ByteTrack again on the detections stored by `track` (all boxes at det_conf), with other tracker
+    settings; no detector run. --track-buffer is ByteTrack's own "frames a lost track is kept"."""
+    from ultralytics.engine.results import Boxes
+    from ultralytics.trackers.byte_tracker import BYTETracker
+    from ultralytics.utils import YAML, IterableSimpleNamespace
+    from ultralytics.utils.checks import check_yaml
+    src = json.loads(Path(a.tracks).read_text())
+    frames = D.list_frames(Path(src["frames_dir"]))
+    h, w = cv2.imread(str(frames[0])).shape[:2]
+    cfg = YAML.load(check_yaml(a.tracker))
+    cfg["track_buffer"] = int(a.track_buffer)
+    if a.match_thresh is not None:
+        cfg["match_thresh"] = float(a.match_thresh)
+    if a.fuse_score is not None:
+        cfg["fuse_score"] = a.fuse_score == "true"
+    if cfg["tracker_type"] == "botsort":
+        from ultralytics.trackers.bot_sort import BOTSORT
+        cfg["with_reid"] = False
+        tracker = BOTSORT(IterableSimpleNamespace(**cfg))
+    else:
+        tracker = BYTETracker(IterableSimpleNamespace(**cfg))
+    per = {}
+    for f in frames:
+        rows = src["frames"].get(f.stem, [])
+        ids = [-1] * len(rows)
+        img = cv2.imread(str(f)) if cfg["tracker_type"] == "botsort" else None    # BoT-SORT's camera-motion step reads the frame
+        if rows:
+            boxes = Boxes(np.array([r[:6] for r in rows], dtype=np.float32), (h, w))
+            for t in tracker.update(boxes, img):
+                ids[int(t[7])] = int(t[4])
+        elif img is not None:
+            tracker.update(Boxes(np.zeros((0, 6), dtype=np.float32), (h, w)), img)
+        per[f.stem] = [[*r[:6], i] for r, i in zip(rows, ids)]
+    used = {k: cfg[k] for k in ("tracker_type", "track_buffer", "match_thresh", "fuse_score")}
+    Path(a.out).write_text(json.dumps(dict(params=dict(PARAMS, tracker_used=used), frames_dir=src["frames_dir"],
+                                           osd_boxes=src.get("osd_boxes"), frames=per)))
+    print("wrote", a.out)
+
+
 # ------------------------------------------------------------------ measure (no answers)
 
 def ruler_reach(res, pct=PARAMS["reach_pct"]):
@@ -363,7 +404,10 @@ def cmd_score_av2(a):
           f"({n_match / max(1, n_gt):.0%}); our tracks matched {len(seq_by_ours)}, cars matched {len(seq_by_gt)}")
     print(f"   wrong car (our id moves to another car): {wrong} times, in {tracks_wrong} of {len(seq_by_ours)} tracks "
           f"= {wrong / max(1, n_match) * 100:.2f} per 100 matched boxes")
-    print(f"   restart (a car gets a new id of ours): {restart} times over {len(seq_by_gt)} cars")
+    gaps = [y[0] - x[0] for v in seq_by_gt.values() for x, y in zip(v[:-1], v[1:]) if x[1] != y[1]]
+    gap_txt = (f"; frames between the old id's last match and the new id's first: median {np.median(gaps):.0f}, "
+               f"<= 2 frames {np.mean(np.array(gaps) <= 2):.0%}") if gaps else ""
+    print(f"   restart (a car gets a new id of ours): {restart} times over {len(seq_by_gt)} cars{gap_txt}")
     if a.cars and not Path(a.cars).exists():
         print("   distance: no measurement (dash-scale refused on this log)")
     elif a.cars:
@@ -396,12 +440,19 @@ def main():
     s = sub.add_parser("score")
     s.add_argument("--cars", required=True)
     s.add_argument("--truth", required=True)
+    rt = sub.add_parser("retrack")
+    rt.add_argument("--tracks", required=True)
+    rt.add_argument("--out", required=True)
+    rt.add_argument("--track-buffer", type=int, default=30)
+    rt.add_argument("--tracker", default=PARAMS["tracker"], help="bytetrack.yaml or botsort.yaml (Ultralytics built-ins)")
+    rt.add_argument("--match-thresh", type=float, default=None)
+    rt.add_argument("--fuse-score", choices=("true", "false"), default=None)
     v = sub.add_parser("score-av2")
     v.add_argument("--tracks", required=True)
     v.add_argument("--cars", default=None)
     v.add_argument("--max-range", type=float, default=60.0)
     a = ap.parse_args()
-    dict(track=cmd_track, measure=cmd_measure, score=cmd_score)[a.cmd](a) if a.cmd != "score-av2" else cmd_score_av2(a)
+    dict(track=cmd_track, retrack=cmd_retrack, measure=cmd_measure, score=cmd_score, **{"score-av2": cmd_score_av2})[a.cmd](a)
 
 
 if __name__ == "__main__":

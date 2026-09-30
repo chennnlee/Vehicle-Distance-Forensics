@@ -203,8 +203,35 @@ def tophat_stack(frames, idx, y0, y1, k, ds):
     return out
 
 
-def lines_in_window(T, y0, ds, w, p=PARAMS):
-    """Dashed-line candidates from one window of top-hat frames (full-res x = a*y + b)."""
+def _curve_refine(xs, ys, a2, b2, hh):
+    """Quadratic x = q2 r^2 + q1 r + q0 (downsampled rows r) grown from the bottom of the band upward: each
+    pass keeps the ridge pixels within 4 px of the current model over a lower part of the band, refits,
+    and extends the part by a quarter, so the model follows a line that bends away from its straight
+    fit without reaching for a neighbouring line. Returns (q2, q1, q0) or None when the curve does not fit
+    clearly better than the straight line."""
+    model = np.array([0.0, a2, b2])
+    for frac, deg in ((0.5, 1), (0.75, 2), (1.0, 2)):          # lower half as a line, then grow upward as a curve
+        r_lo = hh * (1 - frac)
+        sel = (ys >= r_lo) & (np.abs(xs - np.polyval(model, ys)) < 4)
+        if sel.sum() < 30 or np.ptp(ys[sel]) < 0.6 * (hh - r_lo):
+            return None
+        model = np.polyfit(ys[sel], xs[sel], deg)
+        if deg == 1:
+            model = np.r_[0.0, model]
+    sel = np.abs(xs - np.polyval(model, ys)) < 4
+    if sel.sum() < 40 or np.ptp(ys[sel]) < 0.6 * hh:
+        return None
+    straight = np.polyfit(ys[sel], xs[sel], 1)
+    r_q = np.sqrt(np.mean((xs[sel] - np.polyval(model, ys[sel])) ** 2))
+    r_s = np.sqrt(np.mean((xs[sel] - np.polyval(straight, ys[sel])) ** 2))
+    return tuple(float(v) for v in model) if r_q < 0.9 * r_s else None
+
+
+def lines_in_window(T, y0, ds, w, p=PARAMS, curve=False):
+    """Dashed-line candidates from one window of top-hat frames (full-res x = a*y + b).
+    curve=True (2026-09-30, off by default): each line may also get c and y_ref, x = a*y + b + c*(y - y_ref)^2,
+    with a, b still the tangent at the band bottom y_ref (so the crossing row and the lane width at the
+    bottom keep their meaning)."""
     std = T.astype(np.float32).std(0)
     norm = std / (np.median(std, axis=1, keepdims=True) + 1.0)
     binary = (norm > p["norm_thr"]).astype(np.uint8) * 255
@@ -234,7 +261,16 @@ def lines_in_window(T, y0, ds, w, p=PARAMS):
         score = float(norm[rr[ok], xx[ok]].mean())
         # back to full resolution: x_full = ds*(a2*(y_full - y0)/ds + b2)
         A, B = a2, ds * b2 - a2 * y0
-        out.append(dict(a=float(A), b=float(B), score=score))
+        cand = dict(a=float(A), b=float(B), score=score)
+        if curve:
+            q = _curve_refine(xs.astype(np.float64), ys.astype(np.float64), a2, b2, hh)
+            if q is not None:
+                q2, q1, q0 = q
+                y_ref = float(y0 + ds * hh)
+                f = lambda y: ds * np.polyval(q, (y - y0) / ds)
+                a_t = 2 * (q2 / ds) * (y_ref - y0) + q1
+                cand.update(a=float(a_t), b=float(f(y_ref) - a_t * y_ref), c=float(q2 / ds), y_ref=y_ref)
+        out.append(cand)
     # merge near-duplicates, strongest first
     out.sort(key=lambda d: -d["score"])
     merged = []
@@ -255,7 +291,7 @@ def ego_pair(cands, w, y_bottom):
     return L, R
 
 
-def track_lines(frames, idx, fps, band_bottom, p=PARAMS):
+def track_lines(frames, idx, fps, band_bottom, p=PARAMS, curve=False):
     g0 = cv2.imread(str(frames[0]), cv2.IMREAD_GRAYSCALE)
     h, w = g0.shape
     y0, y1 = int(p["det_top"] * h), int(band_bottom * h)
@@ -268,7 +304,7 @@ def track_lines(frames, idx, fps, band_bottom, p=PARAMS):
     windows = []
     for c in range(0, len(idx), hop):
         lo, hi = max(0, c - win // 2), min(len(idx), c + win // 2 + 1)
-        cands = lines_in_window(T[lo:hi], y0, ds, w, p)
+        cands = lines_in_window(T[lo:hi], y0, ds, w, p, curve=curve)
         L, R = ego_pair(cands, w, y1)
         vp = None
         if L and R and abs(L["a"] - R["a"]) > 1e-3:
@@ -277,6 +313,18 @@ def track_lines(frames, idx, fps, band_bottom, p=PARAMS):
                 vp = float(yv)
         windows.append(dict(center=c, frame=idx[c], left=L, right=R, vp_row=vp, n_cands=len(cands)))
     return dict(windows=windows, height=h, width=w, det_rows=[y0, y1], tophat_px=k, idx=list(idx))
+
+
+def line_x(line, y):
+    """x of a tracked line at image row y (with its curve term when it has one)."""
+    x = line["a"] * y + line["b"]
+    if "c" in line:
+        x = x + line["c"] * (y - line["y_ref"]) ** 2
+    return x
+
+
+def line_slope(line, y):
+    return line["a"] + (2 * line["c"] * (y - line["y_ref"]) if "c" in line else 0.0)
 
 
 def lines_for(track, n):
@@ -310,7 +358,7 @@ def line_profile(tophat, depth_half, line, rows, half_px, zcap):
     dh, dw = depth_half.shape
     B, Z = [], []
     for y in rows:
-        x = int(round(line["a"] * y + line["b"]))
+        x = int(round(line_x(line, y)))
         x0, x1 = max(0, x - half_px), min(w, x + half_px + 1)
         if x1 - x0 < 3:
             break
@@ -448,12 +496,12 @@ def frame_line_widths(gray, left, right, vp_row, y_bottom, p=LINE_WIDTH):
     if y_hi - y_lo < 4:
         return out
     for y in np.unique(np.round(np.linspace(y_lo, y_hi, p["n_rows"])).astype(int)):
-        xl, xr = left["a"] * y + left["b"], right["a"] * y + right["b"]
+        xl, xr = line_x(left, y), line_x(right, y)
         lane = xr - xl
         if lane < max(40, p["min_lane_frac"] * gray.shape[1]):
             continue
         for side, ln, x in (("left", left, xl), ("right", right, xr)):
-            r = stripe_width(gray, int(y), x, ln["a"], lane, p)
+            r = stripe_width(gray, int(y), x, line_slope(ln, y), lane, p)
             if r is not None and r[1] is not None:
                 out.append((side, int(y), r[1] / lane, r[0]))
     return out
@@ -619,7 +667,7 @@ def edge_speeds(per_frame, idx, sides, k, cycle_m, fps, step, baseline_max=1, p=
 
 def run(frames_dir, fps, cycle_m, depth_cache, band_bottom, step=2, model="da3_metric",
         duty_ratio=0.4, p=PARAMS, fx=None, line_width_gate="off", max_line_width_ratio=None,
-        lane_width_tol=None, speed_method="corr", baseline_max=1):
+        lane_width_tol=None, speed_method="corr", baseline_max=1, lane_curve=False):
     """line_width_gate (2026-09-30): "off" (default, the pre-registered behaviour, output unchanged),
     "measure" (record painted width / lane width per line, drop nothing -- for roads outside Taiwan),
     "tw" (Taiwan: also drop a line's cycles where the ratio is over max_line_width_ratio, default
@@ -631,14 +679,15 @@ def run(frames_dir, fps, cycle_m, depth_cache, band_bottom, step=2, model="da3_m
     a car body, a gore-area stripe or the line under the car during a lane change taken as an ego-lane
     line moves it by far more.
     speed_method (2026-09-30): "corr" (default, the pre-registered behaviour) or "edge" (shift read on dash
-    edges, see edge_speeds; baseline_max > 1 adds the long baseline)."""
+    edges, see edge_speeds; baseline_max > 1 adds the long baseline).
+    lane_curve (2026-09-30, off by default): lines may bend (lines_in_window), and the profiles follow them."""
     if speed_method not in ("corr", "edge"):
         raise ValueError(f"speed_method {speed_method!r}: corr or edge")
     if line_width_gate not in ("off", "measure", "tw"):
         raise ValueError(f"line_width_gate {line_width_gate!r}: off, measure or tw")
     frames = list_frames(Path(frames_dir))
     idx = list(range(0, len(frames), step))
-    track = track_lines(frames, idx, fps, band_bottom, p)
+    track = track_lines(frames, idx, fps, band_bottom, p, curve=lane_curve)
     h, w = track["height"], track["width"]
     # the camera's pitch does not jump: a window whose lines cross far from the clip's
     # usual crossing row picked up something else (a car edge, a turning arrow)
@@ -824,6 +873,8 @@ def main():
                    help="2026-09-30, default corr (= the pre-registered run). edge: read the shift on dash edges")
     r.add_argument("--baseline-max", type=int, default=1,
                    help="edge only: longest baseline in samples, predicted from the one-sample shift (default 1 = off)")
+    r.add_argument("--lane-curve", action="store_true",
+                   help="2026-09-30, default off: let the tracked lines bend (quadratic), so profiles follow curves")
     r.add_argument("--step-auto", action="store_true",
                    help="2026-09-30: choose the frame step from fps and cycle (see auto_step); overrides --step")
     r.add_argument("--lane-width-tol", type=float, default=None,
@@ -833,7 +884,8 @@ def main():
     step = auto_step(args.fps, args.cycle_m) if args.step_auto else args.step
     res = run(args.frames, args.fps, args.cycle_m, args.depth_cache, args.band_bottom, step, args.model,
               args.duty, line_width_gate=args.line_width_gate, max_line_width_ratio=args.max_line_width_ratio,
-              lane_width_tol=args.lane_width_tol, speed_method=args.speed_method, baseline_max=args.baseline_max)
+              lane_width_tol=args.lane_width_tol, speed_method=args.speed_method, baseline_max=args.baseline_max,
+              lane_curve=args.lane_curve)
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(json.dumps(res, indent=1))
     nvp = sum(1 for wd in res["windows"] if wd["vp_row"] is not None)
