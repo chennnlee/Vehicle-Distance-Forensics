@@ -6,6 +6,17 @@
 
 **最後更新**:2026-09-29(§11:只用自己程式的尺度錨 + 由距離推自車速的盲測)
 
+> 🔴 **2026-09-30 移除用到組員程式的舊工具**(不改寫歷史,舊版仍可在 git 紀錄查到,括號內是移除前最後一個 commit):
+> `tools/vanishing_point_range_calib.py`(b9bee2c,import 組員的 `dashcam_range_speed`、`odometer_distance_calib`)、
+> `tools/av2_marking_calib.py`(1f86253,呼叫組員的 `lane_line_fit.py`)、
+> `tools/av1_marking_run.py`(b9bee2c)、`tools/run_av1_val.sh`(b9bee2c)、`tools/run_av1_marking.sh`(862386f)、
+> `tools/run_av1_train.sh`(fef2c08)(這四支經由上面兩支間接用到)、
+> `tools/report/demo_c2k19_methods.py`(bf94bb1,import 組員的 `dashcam_range_speed`)。
+> 它們都屬於**舊方法 C**(時間差求 A + 組員的車道線擬合)與「標線 A 對原廠 A」的 AV1/AV2 驗證;
+> 本檔與其他文件中用這些工具得到的數字,一律視為舊方法的結果,**不放進大專生計畫**。
+> 現行方法(深度模型 + 虛線尺 `depth_dash_scale.py`、空間版方法 C `marking_geometry.py`、多車 `depth_dash_multicar.py`)
+> 不 import、不呼叫任何組員的程式;AV2 評分改用不需車道線的 `av2_targets.py --no-lanes`(見 §11.4 補註)。
+
 ---
 
 ## 0. 一句話定位
