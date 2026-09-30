@@ -5,9 +5,11 @@ Two jobs, kept apart on purpose:
 
   frames  video.hevc -> <out>/<tag>/frames/f00001.jpg ... (every frame, no resampling) and
           frame_times.npy. This is the only thing a measurement may read.
-  truth   CAN speed and the car's radar on the frame clock -> <out>/<tag>/ego.csv and
-          radar.csv. Only the scoring step may read these. Write them under data/output/,
+  truth   CAN speed, the pose speed and the car's radar on the frame clock -> <out>/<tag>/ego.csv
+          and radar.csv. Only the scoring step may read these. Write them under data/output/,
           never next to the frames, so a measurement run cannot pick them up by accident.
+          The pose speed (2026-09-30) is |global_pose/frame_velocities| per frame; on seg10/seg21
+          the CAN speed reads about 1.1 % below it, so scoring uses the pose speed first.
 
 What the radar columns mean is read off the data, not taken from anyone's notes.
 processed_log/CAN/radar/value holds 7 numbers per return, laid out like openpilot's
@@ -92,6 +94,9 @@ def cmd_truth(a) -> None:
     out = Path(a.out) / tag
     out.mkdir(parents=True, exist_ok=True)
     ft = load(z, root, "global_pose/frame_times")
+    pose_v = np.linalg.norm(load(z, root, "global_pose/frame_velocities"), axis=1)
+    if len(pose_v) != len(ft):
+        sys.exit(f"frame_velocities has {len(pose_v)} rows, frame_times {len(ft)}")
     st = load(z, root, "processed_log/CAN/speed/t")
     sv = load(z, root, "processed_log/CAN/speed/value")[:, 0]
     rt = load(z, root, "processed_log/CAN/radar/t")
@@ -124,9 +129,9 @@ def cmd_truth(a) -> None:
     t0 = ft[0]
     with open(out / "ego.csv", "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["frame_idx", "t_s", "can_speed_ms"])
+        w.writerow(["frame_idx", "t_s", "can_speed_ms", "pose_speed_ms"])
         for i, t in enumerate(ft):
-            w.writerow([i, f"{t - t0:.4f}", f"{np.interp(t, st, sv):.4f}"])
+            w.writerow([i, f"{t - t0:.4f}", f"{np.interp(t, st, sv):.4f}", f"{pose_v[i]:.4f}"])
 
     # per frame: each track's latest return inside the window before the frame time
     order = np.argsort(rt, kind="stable")

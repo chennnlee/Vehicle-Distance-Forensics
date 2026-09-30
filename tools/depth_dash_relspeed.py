@@ -39,7 +39,6 @@ import depth_dash_scale as D  # noqa: E402
 ROOT = Path(__file__).resolve().parents[1]
 DS = ROOT / "data/output/dash_scale"
 OUT = DS / "relspeed"
-BENCH = ROOT / "data/output/depth_benchmark"
 KEYS = {"c2k19_seg10": "b0c9d2329ad1606b_2018-07-30--13-44-30_10",
         "c2k19_seg21": "b0c9d2329ad1606b_2018-08-15--09-01-03_21"}
 
@@ -255,16 +254,25 @@ def stats(e):
                 within_3=round(float((a <= 3).mean()), 3))
 
 
+# 2026-09-30, independent route: the truth is read by tools/c2k19_extract.py instead of the radar files an earlier
+# export produced; lanes from the 12 ft (3.66 m) US freeway lane; the radar offset is fixed in advance, never fitted:
+# ranges start at the front of the car (openpilot v0.5.7 radar_interface), the camera 1.52 m behind the radar, the
+# depth read where the car meets the road, 0.85 m ahead of its rear face (measured on the open AV2 logs, see
+# depth_dash_multicar.PARAMS["av2_offset_m"]). The 2026-09-29 scoring files are kept.
+TRUTH = ROOT / "data/output/c2k19_truth"
+SCORE_2 = dict(lane_half_m=3.66 / 2, radar_offset_m=2.37)
+
+
 def radar_in_lane(tag):
-    """Per 0-based frame: the nearest radar return with |lateral| <= lane_half_m."""
+    """Per 0-based frame: the nearest radar return within half a legal lane, with the CAN speed (km/h)."""
+    can = {int(r["frame_idx"]): 3.6 * float(r["can_speed_ms"]) for r in csv.DictReader(open(TRUTH / tag / "ego.csv"))}
     best = {}
-    for r in csv.DictReader(open(BENCH / f"radar_{tag}.csv")):
-        if abs(float(r["radar_lat_m"])) > PARAMS["lane_half_m"]:
+    for r in csv.DictReader(open(TRUTH / tag / "radar.csv")):
+        f, rng = int(r["frame_idx"]), float(r["d_rel_m"])
+        if abs(float(r["y_rel_m"])) > SCORE_2["lane_half_m"] or rng <= 0 or f not in can:
             continue
-        f = int(r["frame_idx"]) - 1
-        rng = float(r["radar_range_m"])
         if f not in best or rng < best[f]["range"]:
-            best[f] = dict(range=rng, slot=r["slot"], rel=float(r["radar_rel_ms"]), can=float(r["can_ego_kmh"]))
+            best[f] = dict(range=rng, slot=r["track_id"], rel=float(r["v_rel_ms"]), can=can[f])
     return best
 
 
@@ -279,6 +287,9 @@ def cmd_score(args):
             continue
         pred = json.loads(fp.read_text())
         radar = radar_in_lane(tag)
+        dash, _ = sealed_result(args.model, key)
+        ends = [(x["z_near"] + x["period"]) * dash["k"] for x in dash.get("periods", []) if x["side"] in dash.get("lines_used", [])]
+        reach = float(np.percentile(ends, 95)) if ends else float("nan")
         step, hw = pred["step"], PARAMS["half_win"]
         ours = {w["frame_i"]: w for w in pred["windows"]}
         n_frames = max(radar) + 1 if radar else 0
@@ -292,11 +303,13 @@ def cmd_score(args):
             can = float(np.mean([radar[f]["can"] for f in fr]))
             rng = float(np.mean([radar[f]["range"] for f in fr]))
             w = ours.get(c)
+            truth_d = rng + SCORE_2["radar_offset_m"]
             row = dict(key=key, frame_i=c, radar_range=rng, radar_rel_ms=rel_t, can_kmh=can,
-                       near=rng < PARAMS["near_m"], has=w is not None)
+                       near=rng < PARAMS["near_m"], has=w is not None, ruler_reach_m=reach)
             if w is not None:
                 row.update(dist=w["dist"], rel_ms=w["rel_ms"], ego_kmh=w["ego_kmh"], abs_kmh=w["abs_kmh"],
-                           agree=abs(w["dist"] - rng) / rng <= PARAMS["agree"],
+                           agree=abs(w["dist"] - truth_d) / truth_d <= PARAMS["agree"],
+                           e_dist_pct=100 * (w["dist"] - truth_d) / truth_d, inside_reach=w["dist"] <= reach,
                            e_rel=3.6 * (w["rel_ms"] - rel_t), e_zero=3.6 * (0.0 - rel_t),
                            e_ego=None if w["ego_kmh"] is None else w["ego_kmh"] - can,
                            e_abs=None if w["abs_kmh"] is None else w["abs_kmh"] - (can + 3.6 * rel_t))
@@ -310,6 +323,7 @@ def cmd_score(args):
         ab = [r for r in h if r["e_abs"] is not None]
         b = dict(truth_windows=len(sel), with_reading=len(h),
                  coverage=round(len(h) / len(sel), 3) if sel else None,
+                 dist_pct=stats([r["e_dist_pct"] for r in h]),
                  rel=stats([r["e_rel"] for r in h]), rel_zero_baseline=stats([r["e_zero"] for r in h]),
                  abs=stats([r["e_abs"] for r in ab]), ego_term=stats([r["e_ego"] for r in ab]))
         if len(h) >= 3:
@@ -317,7 +331,12 @@ def cmd_score(args):
             b["truth_rel_abs_median_kmh"] = round(float(np.median([abs(3.6 * r["radar_rel_ms"]) for r in h])), 2)
         return b
 
-    for name, f in (("all", lambda r: True), ("near", lambda r: r["near"]), ("far", lambda r: not r["near"])):
+    out["scoring"] = dict(truth="tools/c2k19_extract.py", **SCORE_2,
+                          note="2026-09-30 re-score of the 2026-09-29 sealed predictions; near/far as registered (radar "
+                               "range < 32 m); inside/beyond the ruler's reach added (95th percentile of the cycle ends)")
+    for name, f in (("all", lambda r: True), ("near", lambda r: r["near"]), ("far", lambda r: not r["near"]),
+                    ("inside_reach", lambda r: r["has"] and r["inside_reach"]),
+                    ("beyond_reach", lambda r: r["has"] and not r["inside_reach"])):
         sel = [r for r in rows if f(r)]
         out[name] = block(sel)
         ag = [r for r in sel if r["has"] and r["agree"]]
@@ -326,8 +345,8 @@ def cmd_score(args):
                                          abs=stats([r["e_abs"] for r in ag if r["e_abs"] is not None]))
     for key in out["clips"]:
         out["clips"][key]["near"] = block([r for r in rows if r["key"] == key and r["near"]])
-    (od / "score.json").write_text(json.dumps(out, indent=1))
-    with open(od / "windows_scored.csv", "w", newline="") as f:
+    (od / "score_own_truth_20260930.json").write_text(json.dumps(out, indent=1))
+    with open(od / "windows_scored_own_truth_20260930.csv", "w", newline="") as f:
         cols = sorted({c for r in rows for c in r})
         wr = csv.DictWriter(f, fieldnames=cols)
         wr.writeheader()

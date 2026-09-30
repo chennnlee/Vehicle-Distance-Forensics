@@ -130,6 +130,15 @@ SPEED_EDGE = dict(
     max_shift=0.30,         # ... moving at most this fraction of a cycle between samples (the search reaches 0.45)
 )
 
+# Speed from dash-edge tracks (2026-09-30; used only when run(..., speed_method="track") asks for it).
+SPEED_TRACK = dict(
+    win=0.25,               # an edge is followed to the next sample's edge of the same kind within this fraction
+                            # of a cycle of where the neighbouring pair's median edge shift puts it ...
+    win_rel=0.5,            # ... and within this fraction of that shift itself, so an edge that does not move
+                            # (a shadow, the rim of a masked area) cannot be followed as paint
+    min_pts=4,              # a track is fitted only with at least this many samples
+)
+
 # Distance-dependent ruler (2026-09-30; used only when run(..., ruler="curve") asks for it).
 RULER = dict(
     min_span_cycles=1.0,    # the cycles' mid-points must spread over at least this many cycles of model depth
@@ -762,6 +771,63 @@ def edge_speeds(per_frame, idx, sides, k, cycle_m, fps, step, baseline_max=1, p=
     return out
 
 
+def edge_tracks(E, sides, n_samples, c1, Lm, t=SPEED_TRACK):
+    """Follow each dash edge (near end / far end, per line) from sample to sample: the edge at z in sample n
+    continues as the one edge of the same kind in sample n+1 within min(win x cycle, win_rel x c1[n]) of
+    z - c1[n], c1 being the neighbouring pair's median edge shift. Returns the tracks with at least min_pts
+    samples, as lists of (sample index, model distance)."""
+    done = []
+    for sd in sides:
+        for kind in (0, 1):
+            live = []
+            for n in range(n_samples):
+                pos = E[n][sd][kind] if sd in E[n] else []
+                used, nxt = set(), []
+                if n > 0 and c1[n - 1] is not None:
+                    tol = min(t["win"] * Lm, t["win_rel"] * abs(c1[n - 1]))
+                    for tr in live:
+                        pred = tr[-1][1] - c1[n - 1]
+                        cand = [i for i, z in enumerate(pos) if abs(z - pred) <= tol and i not in used]
+                        if len(cand) == 1:
+                            used.add(cand[0])
+                            tr.append((n, pos[cand[0]]))
+                            nxt.append(tr)
+                        else:
+                            done.append(tr)
+                else:
+                    done.extend(live)
+                nxt.extend([(n, z)] for i, z in enumerate(pos) if i not in used)
+                live = nxt
+            done.extend(live)
+    return [tr for tr in done if len(tr) >= t["min_pts"]]
+
+
+def track_speeds(per_frame, idx, sides, k, cycle_m, fps, step, p=PARAMS, t=SPEED_TRACK):
+    """Ego speed with every dash treated as a car that does not move: each dash edge is followed over the samples
+    it stays in view (edge_tracks), its model distance is fitted against time, and the speed is k x the slope --
+    the same measurement as a car's relative speed. The reading of a neighbouring pair is the median slope of
+    the tracks that span it; "baseline" holds how many tracks that was."""
+    Lm = cycle_m / k
+    dt = step / fps
+    E = [{sd: dash_edges(g, pr, cycle_m, p) for sd, (g, pr) in got.items()} for got in per_frame]
+    c1 = []
+    for n in range(len(idx) - 1):
+        sh = [edge_shift(E[n][sd], E[n + 1][sd], 0.0, p["shift_max"] * Lm) for sd in sides if sd in E[n] and sd in E[n + 1]]
+        sh = [x for x in sh if x is not None]
+        c1.append(float(np.median(sh)) if sh else None)
+    fits = []
+    for tr in edge_tracks(E, sides, len(idx), c1, Lm, t):
+        tt = np.array([n for n, _ in tr], float) * dt
+        z = np.array([v for _, v in tr])
+        fits.append((tr[0][0], tr[-1][0], -float(np.polyfit(tt - tt.mean(), z, 1)[0])))
+    out = []
+    for n in range(len(idx) - 1):
+        v = [sl for a, b, sl in fits if a <= n and b >= n + 1]
+        out.append(dict(frame_i=idx[n], frame_j=idx[n + 1], t_s=(idx[n] + idx[n + 1]) / 2 / fps, corr=None, side=None,
+                        kmh=k * float(np.median(v)) * 3.6 if v else None, baseline=len(v) if v else None))
+    return out
+
+
 # ------------------------------------------------------------------ driver
 
 def run(frames_dir, fps, cycle_m, depth_cache, band_bottom, step=2, model="da3_metric",
@@ -778,8 +844,9 @@ def run(frames_dir, fps, cycle_m, depth_cache, band_bottom, step=2, model="da3_m
     width in pixels only follows the lane width (3.25-3.75 m) and not where the car sits in the lane;
     a car body, a gore-area stripe or the line under the car during a lane change taken as an ego-lane
     line moves it by far more.
-    speed_method (2026-09-30): "corr" (default, the pre-registered behaviour) or "edge" (shift read on dash
-    edges, see edge_speeds; baseline_max > 1 adds the long baseline).
+    speed_method (2026-09-30): "corr" (default, the pre-registered behaviour), "edge" (shift read on dash
+    edges, see edge_speeds; baseline_max > 1 adds the long baseline) or "track" (each dash edge followed while
+    in view and its distance fitted against time, see track_speeds).
     lane_curve (2026-09-30, off by default): lines may bend (lines_in_window), and the profiles follow them.
     line_angle_tol (2026-09-30, degrees, None = off): a window where either ego-lane line's angle in the image
     differs from the median of the same side in the windows within +-2 s by more than this is treated like one
@@ -789,8 +856,8 @@ def run(frames_dir, fps, cycle_m, depth_cache, band_bottom, step=2, model="da3_m
     speeds then convert each edge to metres through it, and res["ruler_curve"] carries it for distances)."""
     if ruler not in ("single", "curve"):
         raise ValueError(f"ruler {ruler!r}: single or curve")
-    if speed_method not in ("corr", "edge"):
-        raise ValueError(f"speed_method {speed_method!r}: corr or edge")
+    if speed_method not in ("corr", "edge", "track"):
+        raise ValueError(f"speed_method {speed_method!r}: corr, edge or track")
     if line_width_gate not in ("off", "measure", "tw"):
         raise ValueError(f"line_width_gate {line_width_gate!r}: off, measure or tw")
     frames = list_frames(Path(frames_dir))
@@ -959,7 +1026,7 @@ def run(frames_dir, fps, cycle_m, depth_cache, band_bottom, step=2, model="da3_m
     dt = step / fps
     smax = p["shift_max"] * L
     speeds = []
-    for n in (range(0) if speed_method == "edge" else range(len(idx) - 1)):
+    for n in (range(0) if speed_method in ("edge", "track") else range(len(idx) - 1)):
         a, b = per_frame[n], per_frame[n + 1]
         best = (None, 0.0, None)
         for side in acc:
@@ -975,6 +1042,9 @@ def run(frames_dir, fps, cycle_m, depth_cache, band_bottom, step=2, model="da3_m
         speeds = edge_speeds(per_frame, idx, acc, k, L, fps, step, baseline_max, p,
                              to_m=(lambda z: float(ruler_distance(z, curve))) if curve is not None else None)
         res["speed_method"] = dict(method="edge", baseline_max=baseline_max, **SPEED_EDGE)
+    if speed_method == "track":
+        speeds = track_speeds(per_frame, idx, acc, k, L, fps, step, p)
+        res["speed_method"] = dict(method="track", **SPEED_TRACK)
     res["speeds"] = speeds
     got = [x["kmh"] for x in speeds if x["kmh"] is not None]
     res["speed_coverage"] = len(got) / max(1, len(speeds))
@@ -1005,8 +1075,9 @@ def main():
                    help="threshold of --line-width-gate tw (default %(default)s)")
     r.add_argument("--ruler", choices=("single", "curve"), default="single",
                    help="2026-09-30, default single (= the pre-registered run). curve: distance-dependent ruler")
-    r.add_argument("--speed-method", choices=("corr", "edge"), default="corr",
-                   help="2026-09-30, default corr (= the pre-registered run). edge: read the shift on dash edges")
+    r.add_argument("--speed-method", choices=("corr", "edge", "track"), default="corr",
+                   help="2026-09-30, default corr (= the pre-registered run). edge: read the shift on dash edges; "
+                        "track: follow each dash edge and fit its distance against time")
     r.add_argument("--baseline-max", type=int, default=1,
                    help="edge only: longest baseline in samples, predicted from the one-sample shift (default 1 = off)")
     r.add_argument("--line-angle-tol", type=float, default=None,

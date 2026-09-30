@@ -24,8 +24,15 @@ ROOT = Path(__file__).resolve().parents[1]
 FINAL = ROOT / "data/output/dash_scale/final"
 MODEL = "da3_metric"
 IN = ROOT / "data/input"
-BENCH = ROOT / "data/output/depth_benchmark"
-NEAR_M = 32.0
+NEAR_M = 32.0            # the near/far split registered on 2026-09-29 (kept for comparability with that registration)
+# 2026-09-30, independent route: truth read by tools/c2k19_extract.py, not the radar files an earlier export
+# produced; the radar offset is fixed in advance, never fitted: comma2k19 radar ranges start at the front of the car
+# (openpilot v0.5.7 radar_interface), the camera sits 1.52 m behind the radar (RADAR_TO_CAMERA), and the depth is read
+# where the car meets the road, 0.85 m ahead of its rear face (measured on the open AV2 logs against the lidar; see
+# depth_dash_multicar.PARAMS["av2_offset_m"]); lanes from the 12 ft (3.66 m) US freeway lane.
+TRUTH = ROOT / "data/output/c2k19_truth"
+RADAR_OFFSET_M = 2.37
+LANE_M = 3.66
 
 
 def sha(p: Path) -> str:
@@ -34,7 +41,8 @@ def sha(p: Path) -> str:
 
 def verify_seal():
     seal = json.loads((FINAL / "seal.json").read_text())
-    files = {p.name for p in FINAL.glob("*.json") if p.name not in ("seal.json", "manifest.json", "score.json")}
+    files = {p.name for p in FINAL.glob("*.json")
+             if p.name not in ("seal.json", "manifest.json", "score.json") and not p.name.startswith("score_")}
     unlisted = files - set(seal["files"])
     if unlisted:
         sys.exit(f"result files not in the seal: {sorted(unlisted)}")
@@ -111,39 +119,69 @@ C2K = {"c2k19_seg10": "b0c9d2329ad1606b_2018-07-30--13-44-30_10",
        "c2k19_seg21": "b0c9d2329ad1606b_2018-08-15--09-01-03_21"}
 
 
+def own_truth(tag):
+    """CAN speed (km/h) per frame and the nearest in-lane radar return per frame, from tools/c2k19_extract.py."""
+    can = {int(r["frame_idx"]): 3.6 * float(r["can_speed_ms"]) for r in csv.DictReader(open(TRUTH / tag / "ego.csv"))}
+    lane = {}
+    for r in csv.DictReader(open(TRUTH / tag / "radar.csv")):
+        d = float(r["d_rel_m"])
+        if abs(float(r["y_rel_m"])) > LANE_M / 2 or d <= 0:
+            continue
+        f = int(r["frame_idx"])
+        if f not in lane or d < lane[f][0]:
+            lane[f] = (d, float(r["v_rel_ms"]), int(r["track_id"]))
+    return can, lane
+
+
+def ruler_reach(res, pct=95):
+    """How far the ruler itself was measured: this percentile of the far ends of the dash cycles, in metres."""
+    ends = [(x["z_near"] + x["period"]) * res["k"] for x in res.get("periods", []) if x["side"] in res.get("lines_used", [])]
+    return float(np.percentile(ends, pct)) if ends else None
+
+
+def dist_block(z, truth, k):
+    z, truth = np.asarray(z, float), np.asarray(truth, float)
+    if not len(z):
+        return dict(n=0)
+    e = (k * z - truth) / truth
+    return dict(n=int(len(z)), raw_pct=round(float(np.median(np.abs(z - truth) / truth) * 100), 2),
+                scaled_pct=round(float(np.median(np.abs(e)) * 100), 2), bias_pct=round(float(np.median(e) * 100), 2),
+                over_25pct=round(float(np.mean(np.abs(e) > 0.25)), 3), oracle_k=round(float(np.median(truth / z)), 4))
+
+
 def score_c2k19():
+    """2026-09-30: ego speed vs CAN, and the front car the relspeed run chose (sealed 2026-09-29) vs the
+    nearest in-lane radar return, all truth from tools/c2k19_extract.py. Replaces the scoring on radar-paired targets."""
     out = {}
     for key, tag in C2K.items():
         rp = FINAL / f"{key}.json"
         if not rp.exists():
             continue
         res = json.loads(rp.read_text())
-        e = dict(status=res["status"], k=res.get("k"))
+        e = dict(status=res["status"], k=res.get("k"), truth="tools/c2k19_extract.py", radar_offset_m=RADAR_OFFSET_M,
+                 lane_half_m=LANE_M / 2)
         if res["status"] == "ok":
-            keep = {r["frame_idx"] for r in csv.DictReader(open(BENCH / f"paired_{tag}.csv"))}
-            rows = [r for r in csv.DictReader(open(BENCH / f"unf_{tag}__{MODEL}.csv")) if r["frame_idx"] in keep]
-            pred = np.array([float(r["pred"]) for r in rows])
-            gt = np.array([float(r["radar_range_m"]) for r in rows])
-            n = gt < NEAR_M
-            e.update(n_near=int(n.sum()),
-                     raw_pct=float(np.median(np.abs(pred[n] - gt[n]) / gt[n]) * 100),
-                     scaled_pct=float(np.median(np.abs(res["k"] * pred[n] - gt[n]) / gt[n]) * 100),
-                     radar_k=float(np.median(gt[n] / pred[n])))
-            # ego speed vs CAN at the paired frames (NOT blind: one CAN value was seen during development)
-            can = {int(r["frame_idx"].lstrip("f")) - 1: float(r["can_ego_kmh"])
-                   for r in csv.DictReader(open(BENCH / f"paired_{tag}.csv"))}
-            d = []
-            for s in res.get("speeds", []):
-                if s["kmh"] is None:
-                    continue
-                mid = (s["frame_i"] + s["frame_j"]) / 2
-                near = [f for f in can if abs(f - mid) <= 2]
-                if near:
-                    d.append(s["kmh"] - can[min(near, key=lambda f: abs(f - mid))])
+            can, lane = own_truth(tag)
+            d = [s["kmh"] - float(np.mean([can[f] for f in range(s["frame_i"], s["frame_j"] + 1) if f in can]))
+                 for s in res.get("speeds", []) if s["kmh"] is not None
+                 and any(f in can for f in range(s["frame_i"], s["frame_j"] + 1))]
             if d:
                 d = np.array(d)
-                e.update(ego_vs_can=dict(n=len(d), mae=float(np.mean(np.abs(d))), bias=float(np.mean(d)),
-                                         note="not blind: one CAN value was seen during development"))
+                e["ego_vs_can"] = dict(n=len(d), mae=round(float(np.mean(np.abs(d))), 2), bias=round(float(np.mean(d)), 2),
+                                       note="every pair, not averaged; CAN itself reads ~1.1 % below the pose speed")
+            rs = ROOT / "data/output/dash_scale/relspeed" / MODEL / f"{key}.json"
+            if rs.exists():
+                smp = [s for s in json.loads(rs.read_text())["samples"]
+                       if s.get("dist") is not None and s.get("z_model") and s["frame_i"] in lane]
+                z = np.array([s["z_model"] for s in smp])
+                rng = np.array([lane[s["frame_i"]][0] for s in smp])
+                truth = rng + RADAR_OFFSET_M
+                reach = ruler_reach(res)
+                k = res["k"]
+                e["front_car"] = dict(source=str(rs.relative_to(ROOT)), ruler_reach_m=reach,
+                                      near_registered=dist_block(z[rng < NEAR_M], truth[rng < NEAR_M], k),
+                                      inside_reach=dist_block(z[k * z <= reach], truth[k * z <= reach], k),
+                                      beyond_reach=dist_block(z[k * z > reach], truth[k * z > reach], k))
         out[key] = e
     return out
 
@@ -151,16 +189,18 @@ def score_c2k19():
 # ------------------------------------------------------------------ Argoverse 2 distance
 
 def score_av2():
+    """2026-09-30: targets with no lane fitting at all (av2_targets.py --no-lanes); the lanes come from the lidar
+    cuboid's lateral offset, within 1.5 legal 12 ft lanes of the ego path."""
     out = {}
-    for fp in sorted((ROOT / "data/output/av2_depth").glob("eval_*_rows.csv")):
-        log = fp.name.split("_")[1]
+    for fp in sorted((ROOT / "data/output/av2_depth").glob("nolane_eval_*_rows.csv")):
+        log = fp.name.split("_")[2]
         key = f"av2_{log[:8]}"
         rp = FINAL / f"{key}.json"
         if not rp.exists():
             continue
         res = json.loads(rp.read_text())
         e = dict(status=res["status"], k=res.get("k"))
-        rows = list(csv.DictReader(open(fp)))
+        rows = [r for r in csv.DictReader(open(fp)) if abs(float(r["lat_m"])) <= 1.5 * LANE_M]
         gt = np.array([float(r["gt_m"]) for r in rows])
         if MODEL in rows[0]:
             pred = np.array([float(r[MODEL]) if r[MODEL] not in ("", "nan") else np.nan for r in rows])
@@ -204,7 +244,9 @@ def main():
     score = dict(sealed_utc=seal["sealed_utc"], sealed_commit=seal["git_commit"],
                  haisheng={s: dict(clips=v, **summarize([r for r in rows if r["set"] == s])) for s, v in hs.items()},
                  haisheng_all=summarize(rows), c2k19=score_c2k19(), av2=score_av2())
-    (FINAL / "score.json").write_text(json.dumps(score, indent=1, ensure_ascii=False))
+    score["note"] = ("2026-09-30 independent route: comma2k19 truth from tools/c2k19_extract.py, radar offset fixed "
+                     "in advance, AV2 targets with no lane fitting; the 2026-09-29 score.json is kept unchanged")
+    (FINAL / "score_own_truth_20260930.json").write_text(json.dumps(score, indent=1, ensure_ascii=False))
     print(json.dumps({k: v for k, v in score.items() if k != "haisheng"}, indent=1, ensure_ascii=False))
     for s, v in score["haisheng"].items():
         ok = sum(1 for c in v["clips"] if c["status"] == "ok")
