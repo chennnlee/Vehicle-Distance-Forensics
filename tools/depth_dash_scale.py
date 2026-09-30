@@ -130,6 +130,15 @@ SPEED_EDGE = dict(
     max_shift=0.30,         # ... moving at most this fraction of a cycle between samples (the search reaches 0.45)
 )
 
+# Distance-dependent ruler (2026-09-30; used only when run(..., ruler="curve") asks for it).
+RULER = dict(
+    min_span_cycles=1.0,    # the cycles' mid-points must spread over at least this many cycles of model depth
+                            # (10th-90th percentile), or a slope cannot be told from noise -> single k
+    huber=1.5,              # Huber threshold, in robust sigmas, for the least-squares weights
+    boots=500,              # block bootstrap resamples (blocks of ci_block_s, as for k)
+    reach_pct=95,           # the ruler's reach: this percentile of the cycles' far ends, in metres
+)
+
 
 def _odd(n: int) -> int:
     return n if n % 2 else n + 1
@@ -419,6 +428,69 @@ def dash_cycles(grid, prof, cycle_m, duty, p=PARAMS):
     return out
 
 
+# ------------------------------------------------------------------ 3a. distance-dependent ruler (2026-09-30, off by default)
+
+def _huber_lstsq(A, y, huber):
+    w = np.ones(len(y))
+    c = None
+    for _ in range(10):
+        sw = np.sqrt(w)
+        c = np.linalg.lstsq(A * sw[:, None], y * sw, rcond=None)[0]
+        r = y - A @ c
+        sig = 1.4826 * np.median(np.abs(r)) + 1e-9
+        w = np.minimum(1.0, huber * sig / np.maximum(np.abs(r), 1e-12))
+    return c
+
+
+def ruler_curve(periods, sides, cycle_m, blk, r=RULER):
+    """True distance from model depth Z as d(Z) = c1*Z + c2*Z**2, fitted to the dash cycles themselves.
+
+    A cycle measured from Z1 to Z2 = Z1 + P (model units) spans exactly one legal cycle, so for every cycle
+        L = c1 * (Z2 - Z1) + c2 * (Z2**2 - Z1**2),
+    a linear least-squares problem in (c1, c2) that needs no answer. c2 = 0 is the single k (k = L / P); a model
+    whose scale drifts with distance (the same legal cycle reading shorter further away) gives c2 > 0. The fit
+    integrates the local scale instead of multiplying one depth by one factor. Huber weights; a block bootstrap
+    over time gives the covariance of (c1, c2), as for k. Falls back to c2 = 0 when the cycles do not spread over
+    enough depth to separate a slope from noise.
+    """
+    rows = [x for x in periods if x["side"] in sides]
+    Z1 = np.array([x["z_near"] for x in rows], dtype=np.float64)
+    P = np.array([x["period"] for x in rows], dtype=np.float64)
+    Z2 = Z1 + P
+    A = np.c_[Z2 - Z1, Z2 ** 2 - Z1 ** 2]
+    y = np.full(len(rows), float(cycle_m))
+    mid = (Z1 + Z2) / 2
+    span = float((np.percentile(mid, 90) - np.percentile(mid, 10)) / np.median(P)) if len(rows) else 0.0
+    form = "curve" if span >= r["min_span_cycles"] else "single"
+    fit = (lambda idx: _huber_lstsq(A[idx], y[idx], r["huber"])) if form == "curve" else \
+          (lambda idx: np.array([cycle_m / float(np.median(P[idx])), 0.0]))
+    c = fit(np.arange(len(rows)))
+    groups = {}
+    for i, x in enumerate(rows):
+        groups.setdefault(x["n"] // blk, []).append(i)
+    gl = [np.array(v) for v in groups.values()]
+    rng = np.random.default_rng(0)
+    boots = np.array([fit(np.concatenate([gl[j] for j in rng.integers(0, len(gl), len(gl))])) for _ in range(r["boots"])])
+    cov = np.cov(boots.T)
+    d2 = c[0] * Z2 + c[1] * Z2 ** 2
+    return dict(form=form, c1=float(c[0]), c2=float(c[1]), cov=[[float(v) for v in row] for row in cov],
+                n=int(len(rows)), span_cycles=round(span, 3), reach_m=float(np.percentile(d2, r["reach_pct"])))
+
+
+def ruler_distance(z, curve):
+    """Metres for model depth z (scalar or array) under a ruler_curve result."""
+    z = np.asarray(z, dtype=np.float64)
+    return curve["c1"] * z + curve["c2"] * z ** 2
+
+
+def ruler_sigma(z, curve):
+    """One standard deviation of ruler_distance(z) from the ruler's own bootstrap (scale uncertainty only)."""
+    z = np.asarray(z, dtype=np.float64)
+    g = np.stack([z, z ** 2], axis=-1)
+    cov = np.asarray(curve["cov"])
+    return np.sqrt(np.maximum(0.0, np.einsum("...i,ij,...j->...", g, cov, g)))
+
+
 # ------------------------------------------------------------------ 3b. line width (2026-09-30, off by default)
 
 def _level_edge(tp, i, step, level):
@@ -631,14 +703,41 @@ def edge_shift(e1, e2, lo, hi):
     return float(np.median(d)) if len(d) >= 2 else None
 
 
-def edge_speeds(per_frame, idx, sides, k, cycle_m, fps, step, baseline_max=1, p=PARAMS, e=SPEED_EDGE):
+def edge_speeds(per_frame, idx, sides, k, cycle_m, fps, step, baseline_max=1, p=PARAMS, e=SPEED_EDGE, to_m=None):
     """Speed per neighbouring pair of samples from dash-edge displacements. The pair's own shift (up to
     shift_max of a cycle) is a coarse reading; with baseline_max > 1 it predicts where each edge should be
     m samples later, and edges are re-matched within baseline_win of a cycle of that prediction, for the
     longest m <= baseline_max that still gives a reading (a longer baseline divides the error in placing
-    an edge by m). kmh = k x shift / (m x dt)."""
+    an edge by m). kmh = k x shift / (m x dt). With to_m (a model-depth -> metres mapping, e.g. the
+    distance-dependent ruler) each edge is converted to metres before the displacement is taken."""
     Lm = cycle_m / k
     dt = step / fps
+    if to_m is not None:
+        E0 = [{sd: dash_edges(g, pr, cycle_m, p) for sd, (g, pr) in got.items()} for got in per_frame]
+        E = [{sd: ([float(to_m(v)) for v in ed[0]], [float(to_m(v)) for v in ed[1]]) for sd, ed in fr.items()} for fr in E0]
+        Lm = cycle_m                     # edges are in metres now
+        k = 1.0
+        out = []
+        for n in range(len(idx) - 1):
+            s1 = [edge_shift(E[n][sd], E[n + 1][sd], 0.0, p["shift_max"] * Lm) for sd in sides if sd in E[n] and sd in E[n + 1]]
+            s1 = [x for x in s1 if x is not None]
+            kmh = m_used = None
+            if s1:
+                c1 = float(np.median(s1))
+                best = (c1, 1)
+                for m in range(2, baseline_max + 1):
+                    if n + m >= len(idx):
+                        break
+                    w = e["baseline_win"] * Lm
+                    sm = [edge_shift(E[n][sd], E[n + m][sd], m * c1 - w, m * c1 + w)
+                          for sd in sides if sd in E[n] and sd in E[n + m]]
+                    sm = [x for x in sm if x is not None]
+                    if sm:
+                        best = (float(np.median(sm)), m)
+                kmh, m_used = best[0] / (best[1] * dt) * 3.6, best[1]
+            out.append(dict(frame_i=idx[n], frame_j=idx[n + 1], t_s=(idx[n] + idx[n + 1]) / 2 / fps,
+                            corr=None, side=None, kmh=kmh, baseline=m_used))
+        return out
     E = [{sd: dash_edges(g, pr, cycle_m, p) for sd, (g, pr) in got.items()} for got in per_frame]
     out = []
     for n in range(len(idx) - 1):
@@ -667,7 +766,8 @@ def edge_speeds(per_frame, idx, sides, k, cycle_m, fps, step, baseline_max=1, p=
 
 def run(frames_dir, fps, cycle_m, depth_cache, band_bottom, step=2, model="da3_metric",
         duty_ratio=0.4, p=PARAMS, fx=None, line_width_gate="off", max_line_width_ratio=None,
-        lane_width_tol=None, speed_method="corr", baseline_max=1, lane_curve=False, line_angle_tol=None):
+        lane_width_tol=None, speed_method="corr", baseline_max=1, lane_curve=False, line_angle_tol=None,
+        ruler="single"):
     """line_width_gate (2026-09-30): "off" (default, the pre-registered behaviour, output unchanged),
     "measure" (record painted width / lane width per line, drop nothing -- for roads outside Taiwan),
     "tw" (Taiwan: also drop a line's cycles where the ratio is over max_line_width_ratio, default
@@ -684,7 +784,11 @@ def run(frames_dir, fps, cycle_m, depth_cache, band_bottom, step=2, model="da3_m
     line_angle_tol (2026-09-30, degrees, None = off): a window where either ego-lane line's angle in the image
     differs from the median of the same side in the windows within +-2 s by more than this is treated like one
     that failed the crossing-row gate. The ego-lane lines turn slowly; a jump means another edge was taken
-    (a car body, a gore stripe) or the car is changing lanes, when the pair is not the lane either."""
+    (a car body, a gore stripe) or the car is changing lanes, when the pair is not the lane either.
+    ruler (2026-09-30): "single" (default, one k) or "curve" (distance-dependent ruler, see ruler_curve; the edge
+    speeds then convert each edge to metres through it, and res["ruler_curve"] carries it for distances)."""
+    if ruler not in ("single", "curve"):
+        raise ValueError(f"ruler {ruler!r}: single or curve")
     if speed_method not in ("corr", "edge"):
         raise ValueError(f"speed_method {speed_method!r}: corr or edge")
     if line_width_gate not in ("off", "measure", "tw"):
@@ -847,6 +951,10 @@ def run(frames_dir, fps, cycle_m, depth_cache, band_bottom, step=2, model="da3_m
     q1, q3 = np.percentile(per, [25, 75])
     k = L / med
     res.update(status="ok", k=k, period_model=med, spread=float((q3 - q1) / med), lines_used=acc)
+    curve = None
+    if ruler == "curve":
+        curve = ruler_curve(periods, acc, L, blk)
+        res["ruler_curve"] = curve
 
     dt = step / fps
     smax = p["shift_max"] * L
@@ -864,7 +972,8 @@ def run(frames_dir, fps, cycle_m, depth_cache, band_bottom, step=2, model="da3_m
                            corr=best[1], side=best[2],
                            kmh=None if best[0] is None else best[0] / dt * 3.6))
     if speed_method == "edge":
-        speeds = edge_speeds(per_frame, idx, acc, k, L, fps, step, baseline_max, p)
+        speeds = edge_speeds(per_frame, idx, acc, k, L, fps, step, baseline_max, p,
+                             to_m=(lambda z: float(ruler_distance(z, curve))) if curve is not None else None)
         res["speed_method"] = dict(method="edge", baseline_max=baseline_max, **SPEED_EDGE)
     res["speeds"] = speeds
     got = [x["kmh"] for x in speeds if x["kmh"] is not None]
@@ -894,6 +1003,8 @@ def main():
                         "設置規則第 189-1 條). measure: record the ratio only (use outside Taiwan, e.g. comma2k19/AV1/AV2)")
     r.add_argument("--max-line-width-ratio", type=float, default=LINE_WIDTH["max_ratio_tw"],
                    help="threshold of --line-width-gate tw (default %(default)s)")
+    r.add_argument("--ruler", choices=("single", "curve"), default="single",
+                   help="2026-09-30, default single (= the pre-registered run). curve: distance-dependent ruler")
     r.add_argument("--speed-method", choices=("corr", "edge"), default="corr",
                    help="2026-09-30, default corr (= the pre-registered run). edge: read the shift on dash edges")
     r.add_argument("--baseline-max", type=int, default=1,
@@ -913,7 +1024,7 @@ def main():
     res = run(args.frames, args.fps, args.cycle_m, args.depth_cache, args.band_bottom, step, args.model,
               args.duty, line_width_gate=args.line_width_gate, max_line_width_ratio=args.max_line_width_ratio,
               lane_width_tol=args.lane_width_tol, speed_method=args.speed_method, baseline_max=args.baseline_max,
-              lane_curve=args.lane_curve, line_angle_tol=args.line_angle_tol)
+              lane_curve=args.lane_curve, line_angle_tol=args.line_angle_tol, ruler=args.ruler)
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(json.dumps(res, indent=1))
     nvp = sum(1 for wd in res["windows"] if wd["vp_row"] is not None)
