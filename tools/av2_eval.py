@@ -92,7 +92,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--log", required=True)
-    ap.add_argument("--calib", required=True)
+    ap.add_argument("--calib", default="",
+                    help="calib.json of the marking calibration, only for the method C columns; omit to score the "
+                         "depth models alone (2026-09-30: that calibration runs lane_line_fit.py, a teammate's tool)")
     ap.add_argument("--pred", required=True, help="glob of prediction CSVs from depth_model_benchmark run")
     ap.add_argument("--frames-name", default="pinhole")
     ap.add_argument("--min-iou", type=float, default=0.5)
@@ -108,8 +110,11 @@ def main():
 
     log = Path(args.log)
     meta = json.loads((log / f"{args.frames_name}_meta.json").read_text())
-    cal = {c["log"]: c for c in json.loads(Path(args.calib).read_text())}[log.name]
-    A, y_h = cal.get("A_marking"), cal["y_h"]      # no A: the marking calibration refused this log
+    if args.calib:
+        cal = {c["log"]: c for c in json.loads(Path(args.calib).read_text())}[log.name]
+        A, y_h = cal.get("A_marking"), cal["y_h"]      # no A: the marking calibration refused this log
+    else:
+        A, y_h = None, None
     if A is None:
         print(f"{log.name}: no marking calibration -- method C columns left empty")
 
