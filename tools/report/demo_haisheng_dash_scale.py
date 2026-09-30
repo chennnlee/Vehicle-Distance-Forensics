@@ -158,10 +158,11 @@ def main():
     if tdir.exists():
         shutil.rmtree(tdir)
     tdir.mkdir(parents=True)
-    prev = None
+    prev = {}            # side -> metric profile of the previous sample (panel 3 draws the pair ending at this frame)
     backend = None
     if args.preview_t is not None:
-        js = [int(np.argmin([abs(i / fps - args.preview_t) for i in idx]))]
+        j0 = int(np.argmin([abs(i / fps - args.preview_t) for i in idx]))
+        js = [j for j in (j0 - 1, j0) if j >= 0]      # the previous sample too, so the preview shows the pair
     else:
         js = range(min(len(idx), args.limit) if args.limit else len(idx))
     for j in js:
@@ -268,26 +269,30 @@ def main():
             ins.set_yticks([])
         a2.set_title("② 深度模型 × k 換算成的距離刻度", fontsize=14, fontweight="bold")
         a2.axis("off")
-        # the ruler: metric profile now and one step earlier
+        # the ruler: metric profile now and one step earlier. Panel 3 and the speed text both show the
+        # pair that ENDS at this frame (previous sample -> this frame), on the line that pair was read on.
         a3 = fig.add_axes([0.05, 0.07, 0.40, 0.26])
-        cur = None
+        cur = {}
+        sp_prev = speeds.get(fi - step)
         if lines and depth is not None:
             g = cv2.imread(str(frames[fi]), cv2.IMREAD_GRAYSCALE)
             th = D.white_tophat(g, res["tophat_px"])
             rows = np.arange(res["det_rows"][1] - 1, int(wd["vp_row"] + p["vp_margin"] * h), -1)
-            side = max(lines, key=lambda s: 1 if s == (speeds.get(fi, {}) or {}).get("side") else 0)
-            r = D.line_profile(th, depth, lines[side], rows, half_px, p["zcap_cycles"] * L)
-            if r is not None:
-                grid, prof = D.resample(r[0], r[1], p["dz_model"])
-                cur = (grid * k, prof)
-                if prev is not None:
-                    a3.plot(prev[0], prev[1], color="#BBBBBB", lw=1.5, label=f"{step} 幀前")
-                sp_prev = speeds.get(fi - step)
-                if prev is not None and sp_prev and sp_prev["kmh"] is not None:
+            for sd in lines:
+                r = D.line_profile(th, depth, lines[sd], rows, half_px, p["zcap_cycles"] * L)
+                if r is not None:
+                    grid, prof = D.resample(r[0], r[1], p["dz_model"])
+                    cur[sd] = (grid * k, prof)
+            pair_side = (sp_prev or {}).get("side")
+            side = pair_side if pair_side in cur else next(iter(cur), None)
+            if side is not None:
+                if side in prev:
+                    a3.plot(prev[side][0], prev[side][1], color="#BBBBBB", lw=1.5, label=f"{step} 幀前")
+                if side in prev and sp_prev and sp_prev["kmh"] is not None:
                     shift = sp_prev["kmh"] / 3.6 * step / fps
-                    a3.plot(prev[0] - shift, prev[1], color="#555555", lw=1.3, ls=(0, (4, 3)),
+                    a3.plot(prev[side][0] - shift, prev[side][1], color="#555555", lw=1.3, ls=(0, (4, 3)),
                             label=f"{step} 幀前的曲線往近處平移 {shift:.2f} m")
-                a3.plot(cur[0], cur[1], color=C_LINE, lw=2, label="這一幀")
+                a3.plot(cur[side][0], cur[side][1], color=C_LINE, lw=2, label="這一幀")
                 for z in np.arange(0, 40, L):
                     a3.axvline(z, color="#EEEEEE", lw=0.8, zorder=0)
         a3.set_xlim(0, 35)
@@ -295,7 +300,7 @@ def main():
         a3.set_ylabel("虛線亮度", fontsize=11)
         a3.set_title(f"③ 尺:虛線起點間距 = 法定 {L:g} m → k = {k:.3f};平移量 ÷ 時間 = 自車速",
                      fontsize=13, fontweight="bold")
-        if cur is not None:
+        if cur:
             a3.legend(loc="upper right", fontsize=9)
         prev = cur
         # speed over time
@@ -326,14 +331,15 @@ def main():
         a4.set_title("④ 由距離變化推得的自車速", fontsize=13, fontweight="bold")
         a4.legend(loc="lower left", fontsize=10)
         a4.grid(alpha=0.3)
-        sp = speeds.get(fi)
+        sp = sp_prev                                  # the pair drawn in panel 3
         sp_txt = "這一幀沒有速度讀值" if not sp or sp["kmh"] is None else \
-            f"自車速 = 虛線剖面平移 ÷ 時間 = {sp['kmh']:.1f} km/h(相關 {sp['corr']:.2f})"
+            (f"自車速 = 平移 {sp['kmh'] / 3.6 * step / fps:.2f} m ÷ {step / fps:.3f} s = {sp['kmh']:.1f} km/h"
+             + (f"(相關 {sp['corr']:.2f})" if sp.get("corr") is not None else ""))
         fig.text(0.01, 0.355, sp_txt, fontsize=13, color=C_OURS, fontweight="bold")
         fig.text(0.51, 0.355, car_txt, fontsize=13, color=C_CAR, fontweight="bold")
         fig.savefig(tdir / f"{j:04d}.png", dpi=100)
         plt.close(fig)
-        if args.preview_t is not None:
+        if args.preview_t is not None and j == js[-1]:
             dst = OUT / args.key / f"preview_{args.preview_t:g}s.png"
             shutil.copy(tdir / f"{j:04d}.png", dst)
             print("wrote", dst)
