@@ -26,6 +26,9 @@ tracked ego-lane lines and the ego speed come from a dash-scale result, nothing 
            same lane, distance within 25 % after the radar offset fixed in advance); reports distance
            error by lane and range, how many radar cars inside the ruler's reach were found, id
            switches, and relative-speed error against guessing zero.
+  score-av2  Argoverse 2 development logs only (annotations already on disk; never downloads): our tracked
+           boxes vs projected lidar cuboids, which keep one id per car -- counts our ids that move to another
+           car and cars that get a new id; with --cars also the distance error against the lidar.
 
   python3 tools/depth_dash_multicar.py track   --frames DIR --out tracks.json
   python3 tools/depth_dash_multicar.py measure --frames DIR --tracks tracks.json --dash result.json \\
@@ -119,6 +122,9 @@ def lane_of(box, wd):
 
 def cmd_measure(a):
     res = json.loads(Path(a.dash).read_text())
+    if res.get("status") != "ok":
+        print(f"{a.dash}: the dash-scale result was refused ({res.get('reason', '')[:80]}); no distances")
+        return
     tr = json.loads(Path(a.tracks).read_text())["frames"]
     frames = D.list_frames(Path(a.frames))
     h, w = cv2.imread(str(frames[0])).shape[:2]
@@ -258,6 +264,125 @@ def cmd_score(a):
           f"radar cars seen under more than one of our ids {sum(len(v) > 1 for v in frag.values())} of {len(frag)}")
 
 
+# ------------------------------------------------------------------ score, Argoverse 2 (answers already open)
+
+AV2_OPEN = {"c865c156", "cf5aaa11", "dc9077b9", "f668074d"}     # development logs; the four sealed ones stay closed
+
+
+def av2_cuboids(log_dir: Path, stems):
+    """Per frame stem: vehicle cuboids projected into the front camera (lidar annotations, track uuid) with
+    the forward distance from the camera to the cuboid's nearest face. Refuses a log whose annotations are
+    not on disk: this never downloads anything."""
+    import pandas as pd
+    import av2_eval as E
+    ann_p = log_dir / "annotations.feather"
+    if log_dir.name[:8] not in AV2_OPEN or not ann_p.exists():
+        raise SystemExit(f"{log_dir.name}: not an open development log with annotations on disk; refusing")
+    meta = json.loads((log_dir / "pinhole_meta.json").read_text())
+    ann = pd.read_feather(ann_p)
+    ann = ann[ann.category.isin({"REGULAR_VEHICLE", "LARGE_VEHICLE", "BUS", "BOX_TRUCK", "TRUCK", "SCHOOL_BUS",
+                                 "ARTICULATED_BUS", "TRUCK_CAB", "VEHICULAR_TRAILER"})]
+    poses = pd.read_feather(log_dir / "city_SE3_egovehicle.feather").drop_duplicates("timestamp_ns")
+    poses = poses.sort_values("timestamp_ns").reset_index(drop=True)
+    ptime = poses.timestamp_ns.values
+    extr = pd.read_feather(log_dir / "calibration/egovehicle_SE3_sensor.feather")
+    extr = extr[extr.sensor_name == "ring_front_center"].iloc[0]
+    cam_T_ego = np.linalg.inv(E.SE3((extr.qw, extr.qx, extr.qy, extr.qz), (extr.tx_m, extr.ty_m, extr.tz_m)))
+    K = np.array([[meta["fx"], 0, meta["cx"]], [0, meta["fy"], meta["cy"]], [0, 0, 1]])
+    fr = pd.read_csv(log_dir / "pinhole_frames.csv")
+    ts_of = dict(zip(fr.frame_idx.astype(str), fr.timestamp_ns))
+    ann_ts = np.unique(ann.timestamp_ns.values)
+
+    def pose_at(ts):
+        r = poses.iloc[int(np.argmin(np.abs(ptime - ts)))]
+        return E.SE3((r.qw, r.qx, r.qy, r.qz), (r.tx_m, r.ty_m, r.tz_m))
+    out = {}
+    for stem in stems:
+        ts = ts_of.get(stem)
+        cubs = []
+        if ts is not None:
+            ats = int(ann_ts[np.argmin(np.abs(ann_ts - ts))])
+            if abs(ats - ts) <= 60e6:
+                M = np.linalg.inv(pose_at(ts)) @ pose_at(ats)
+                for _, a in ann[ann.timestamp_ns == ats].iterrows():
+                    C = np.c_[E.corners(a), np.ones(8)].T
+                    Ce = (M @ C).T[:, :3]
+                    Ch = (cam_T_ego @ M @ C).T[:, :3]
+                    if (Ch[:, 2] <= 0.5).any():
+                        continue
+                    uv = (K @ Ch.T).T
+                    uv = uv[:, :2] / uv[:, 2:3]
+                    cubs.append(dict(box=[float(uv[:, 0].min()), float(uv[:, 1].min()), float(uv[:, 0].max()), float(uv[:, 1].max())],
+                                     gt=float(Ce[:, 0].min()) - float(extr.tx_m), uuid=str(a.track_uuid)))
+        out[stem] = cubs
+    return out, int(meta.get("width", 0) or 0), int(meta.get("height", 0) or 0)
+
+
+def _iou(a, b):
+    ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    u = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - ix * iy
+    return ix * iy / u if u > 0 else 0.0
+
+
+def cmd_score_av2(a):
+    """Every frame: our tracked boxes vs projected lidar cuboids (clipped to the image), Hungarian on IoU >= 0.5.
+    "wrong car": one of our ids matched to cuboid A and later to cuboid B; "restart": one cuboid matched to one
+    of our ids and later to another. With --cars also the distance of matched boxes (radar-free: lidar), the
+    offset fixed in advance at +0.8 m (tyre contact vs the cuboid's rear face)."""
+    from scipy.optimize import linear_sum_assignment
+    tr = json.loads(Path(a.tracks).read_text())
+    log_dir = next(Path(ROOT / "data/input/av2").glob(Path(tr["frames_dir"]).parent.name[:8] + "*"))
+    frames = D.list_frames(Path(tr["frames_dir"]))
+    h, w = cv2.imread(str(frames[0])).shape[:2]
+    bonnet = D.static_rows(frames)[0]
+    gt, _, _ = av2_cuboids(log_dir, [f.stem for f in frames])
+    clip = lambda b: [max(0.0, b[0]), max(0.0, b[1]), min(float(w), b[2]), min(float(h), b[3])]
+    seq_by_ours, seq_by_gt, n_match, n_gt = {}, {}, 0, 0
+    match_at = {}
+    for j, f in enumerate(frames):
+        ours = [b for b in tr["frames"].get(f.stem, []) if b[6] >= 0 and b[4] >= PARAMS["min_conf"] and b[3] < bonnet - PARAMS["bonnet_px"]]
+        cubs = [c for c in gt.get(f.stem, []) if c["gt"] <= a.max_range]
+        cb = [clip(c["box"]) for c in cubs]
+        keep = [i for i, b in enumerate(cb) if (b[2] - b[0]) * (b[3] - b[1]) >= 400]
+        n_gt += len(keep)
+        if not ours or not keep:
+            continue
+        C = np.array([[1 - _iou(o[:4], cb[i]) for i in keep] for o in ours])
+        for oi, kj in zip(*linear_sum_assignment(C)):
+            if C[oi, kj] <= 0.5:
+                o, c = ours[oi], cubs[keep[kj]]
+                n_match += 1
+                seq_by_ours.setdefault(o[6], []).append((j, c["uuid"]))
+                seq_by_gt.setdefault(c["uuid"], []).append((j, o[6]))
+                match_at[(f.stem, o[6])] = c
+    wrong = sum(sum(1 for (_, x), (_, y) in zip(v[:-1], v[1:]) if x != y) for v in seq_by_ours.values())
+    restart = sum(sum(1 for (_, x), (_, y) in zip(v[:-1], v[1:]) if x != y) for v in seq_by_gt.values())
+    tracks_wrong = sum(any(x != y for (_, x), (_, y) in zip(v[:-1], v[1:])) for v in seq_by_ours.values())
+    print(f"{log_dir.name[:8]}: frames {len(frames)}, visible cuboids <= {a.max_range:.0f} m: {n_gt}, matched boxes {n_match} "
+          f"({n_match / max(1, n_gt):.0%}); our tracks matched {len(seq_by_ours)}, cars matched {len(seq_by_gt)}")
+    print(f"   wrong car (our id moves to another car): {wrong} times, in {tracks_wrong} of {len(seq_by_ours)} tracks "
+          f"= {wrong / max(1, n_match) * 100:.2f} per 100 matched boxes")
+    print(f"   restart (a car gets a new id of ours): {restart} times over {len(seq_by_gt)} cars")
+    if a.cars and not Path(a.cars).exists():
+        print("   distance: no measurement (dash-scale refused on this log)")
+    elif a.cars:
+        cars = json.loads(Path(a.cars).read_text())
+        stem_of = {fi: frames[fi].stem for fi in range(len(frames))}
+        e = {"ego lane, inside reach": [], "side lanes, inside reach": [], "beyond reach": []}
+        for s in cars["samples"]:
+            for o in s["objects"]:
+                c = match_at.get((stem_of[s["fi"]], o["id"]))
+                if c is None or o["lane"] not in (-1, 0, 1):
+                    continue
+                err = 100 * (o["dist"] - (c["gt"] + 0.8)) / (c["gt"] + 0.8)
+                e["beyond reach" if o["far"] else ("ego lane, inside reach" if o["lane"] == 0 else "side lanes, inside reach")].append(err)
+        for lab, v in e.items():
+            if v:
+                v = np.array(v)
+                print(f"   distance {lab:<26} n {len(v):4d}  median |err| {np.median(np.abs(v)):4.1f}%  bias {np.median(v):+5.1f}%")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -271,8 +396,12 @@ def main():
     s = sub.add_parser("score")
     s.add_argument("--cars", required=True)
     s.add_argument("--truth", required=True)
+    v = sub.add_parser("score-av2")
+    v.add_argument("--tracks", required=True)
+    v.add_argument("--cars", default=None)
+    v.add_argument("--max-range", type=float, default=60.0)
     a = ap.parse_args()
-    dict(track=cmd_track, measure=cmd_measure, score=cmd_score)[a.cmd](a)
+    dict(track=cmd_track, measure=cmd_measure, score=cmd_score)[a.cmd](a) if a.cmd != "score-av2" else cmd_score_av2(a)
 
 
 if __name__ == "__main__":
