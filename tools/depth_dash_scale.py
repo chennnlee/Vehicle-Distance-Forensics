@@ -123,6 +123,13 @@ LINE_WIDTH = dict(
                             # shrinks the lane width) -- their cycles are dropped too, which does no harm.
 )
 
+# Speed from dash edges (2026-09-30; used only when run(..., speed_method="edge") asks for it).
+SPEED_EDGE = dict(
+    baseline_win=0.25,      # long baseline: edges re-matched within this fraction of a cycle of the predicted shift
+    vmax_kmh=130.0,         # auto step: the fastest speed the step has to handle ...
+    max_shift=0.30,         # ... moving at most this fraction of a cycle between samples (the search reaches 0.45)
+)
+
 
 def _odd(n: int) -> int:
     return n if n % 2 else n + 1
@@ -531,11 +538,88 @@ def profile_shift(g1, p1, g2, p2, smax, dz, min_corr):
     return (i + off) * dz, float(cs[i])
 
 
+
+# ------------------------------------------------------------------ 4b. speed from dash edges (2026-09-30, off by default)
+
+def auto_step(fps, cycle_m, e=SPEED_EDGE):
+    """Largest frame step at which the road moves at most max_shift of a cycle between samples at vmax_kmh.
+    Needs no answer: the correlation search only reaches shift_max (0.45) of a cycle, and on comma2k19 a step
+    of 4 frames already moved 0.40-0.45 of a cycle at 105-120 km/h, where readings dropped out and read low."""
+    return max(1, int(e["max_shift"] * cycle_m * fps / (e["vmax_kmh"] / 3.6)))
+
+
+def dash_edges(grid, prof, cycle_m, p=PARAMS):
+    """Near and far ends (model units) of the complete dashes on one profile, found exactly as dash_cycles
+    finds its runs. Reading the shift on the same feature that sets k lets a distance-dependent error in
+    placing an edge cancel between the two (it moves the cycle and the shift alike)."""
+    lo, hi = np.percentile(prof, [10, 90])
+    if hi - lo < p["min_contrast"]:
+        return [], []
+    on = prof > lo + 0.5 * (hi - lo)
+    dz = grid[1] - grid[0]
+    gap = int(round(p["close_gap"] * cycle_m / dz))
+    idx = np.flatnonzero(np.diff(np.r_[0, on.astype(int), 0]))
+    merged = []
+    for a, b in zip(idx[::2], idx[1::2]):
+        if merged and a - merged[-1][1] <= gap:
+            merged[-1][1] = b
+        else:
+            merged.append([a, b])
+    minrun = int(round(p["min_run"] * cycle_m / dz))
+    runs = [r for r in merged if r[1] - r[0] >= minrun and r[0] > 0 and r[1] < len(prof)]
+    return [float(grid[a]) for a, _ in runs], [float(grid[b - 1]) for _, b in runs]
+
+
+def edge_shift(e1, e2, lo, hi):
+    """Median displacement toward the camera of edges matched between two frames: each edge of e1 is paired
+    with the single edge of the same kind (near end / far end) in e2 whose displacement lies in (lo, hi).
+    None with fewer than two matched edges."""
+    d = []
+    for kind in (0, 1):
+        for x in e1[kind]:
+            c = [x - y for y in e2[kind] if lo < x - y < hi]
+            if len(c) == 1:
+                d.append(c[0])
+    return float(np.median(d)) if len(d) >= 2 else None
+
+
+def edge_speeds(per_frame, idx, sides, k, cycle_m, fps, step, baseline_max=1, p=PARAMS, e=SPEED_EDGE):
+    """Speed per neighbouring pair of samples from dash-edge displacements. The pair's own shift (up to
+    shift_max of a cycle) is a coarse reading; with baseline_max > 1 it predicts where each edge should be
+    m samples later, and edges are re-matched within baseline_win of a cycle of that prediction, for the
+    longest m <= baseline_max that still gives a reading (a longer baseline divides the error in placing
+    an edge by m). kmh = k x shift / (m x dt)."""
+    Lm = cycle_m / k
+    dt = step / fps
+    E = [{sd: dash_edges(g, pr, cycle_m, p) for sd, (g, pr) in got.items()} for got in per_frame]
+    out = []
+    for n in range(len(idx) - 1):
+        s1 = [edge_shift(E[n][sd], E[n + 1][sd], 0.0, p["shift_max"] * Lm) for sd in sides if sd in E[n] and sd in E[n + 1]]
+        s1 = [x for x in s1 if x is not None]
+        kmh = m_used = None
+        if s1:
+            c1 = float(np.median(s1))
+            best = (c1, 1)
+            for m in range(2, baseline_max + 1):
+                if n + m >= len(idx):
+                    break
+                w = e["baseline_win"] * Lm
+                sm = [edge_shift(E[n][sd], E[n + m][sd], m * c1 - w, m * c1 + w)
+                      for sd in sides if sd in E[n] and sd in E[n + m]]
+                sm = [x for x in sm if x is not None]
+                if sm:
+                    best = (float(np.median(sm)), m)
+            kmh, m_used = k * best[0] / (best[1] * dt) * 3.6, best[1]
+        out.append(dict(frame_i=idx[n], frame_j=idx[n + 1], t_s=(idx[n] + idx[n + 1]) / 2 / fps,
+                        corr=None, side=None, kmh=kmh, baseline=m_used))
+    return out
+
+
 # ------------------------------------------------------------------ driver
 
 def run(frames_dir, fps, cycle_m, depth_cache, band_bottom, step=2, model="da3_metric",
         duty_ratio=0.4, p=PARAMS, fx=None, line_width_gate="off", max_line_width_ratio=None,
-        lane_width_tol=None):
+        lane_width_tol=None, speed_method="corr", baseline_max=1):
     """line_width_gate (2026-09-30): "off" (default, the pre-registered behaviour, output unchanged),
     "measure" (record painted width / lane width per line, drop nothing -- for roads outside Taiwan),
     "tw" (Taiwan: also drop a line's cycles where the ratio is over max_line_width_ratio, default
@@ -545,7 +629,11 @@ def run(frames_dir, fps, cycle_m, depth_cache, band_bottom, step=2, model="da3_m
     that failed the crossing-row gate. On a flat road a fixed row is a fixed distance ahead, so that
     width in pixels only follows the lane width (3.25-3.75 m) and not where the car sits in the lane;
     a car body, a gore-area stripe or the line under the car during a lane change taken as an ego-lane
-    line moves it by far more."""
+    line moves it by far more.
+    speed_method (2026-09-30): "corr" (default, the pre-registered behaviour) or "edge" (shift read on dash
+    edges, see edge_speeds; baseline_max > 1 adds the long baseline)."""
+    if speed_method not in ("corr", "edge"):
+        raise ValueError(f"speed_method {speed_method!r}: corr or edge")
     if line_width_gate not in ("off", "measure", "tw"):
         raise ValueError(f"line_width_gate {line_width_gate!r}: off, measure or tw")
     frames = list_frames(Path(frames_dir))
@@ -689,7 +777,7 @@ def run(frames_dir, fps, cycle_m, depth_cache, band_bottom, step=2, model="da3_m
     dt = step / fps
     smax = p["shift_max"] * L
     speeds = []
-    for n in range(len(idx) - 1):
+    for n in (range(0) if speed_method == "edge" else range(len(idx) - 1)):
         a, b = per_frame[n], per_frame[n + 1]
         best = (None, 0.0, None)
         for side in acc:
@@ -701,6 +789,9 @@ def run(frames_dir, fps, cycle_m, depth_cache, band_bottom, step=2, model="da3_m
         speeds.append(dict(frame_i=idx[n], frame_j=idx[n + 1], t_s=(idx[n] + idx[n + 1]) / 2 / fps,
                            corr=best[1], side=best[2],
                            kmh=None if best[0] is None else best[0] / dt * 3.6))
+    if speed_method == "edge":
+        speeds = edge_speeds(per_frame, idx, acc, k, L, fps, step, baseline_max, p)
+        res["speed_method"] = dict(method="edge", baseline_max=baseline_max, **SPEED_EDGE)
     res["speeds"] = speeds
     got = [x["kmh"] for x in speeds if x["kmh"] is not None]
     res["speed_coverage"] = len(got) / max(1, len(speeds))
@@ -729,13 +820,20 @@ def main():
                         "設置規則第 189-1 條). measure: record the ratio only (use outside Taiwan, e.g. comma2k19/AV1/AV2)")
     r.add_argument("--max-line-width-ratio", type=float, default=LINE_WIDTH["max_ratio_tw"],
                    help="threshold of --line-width-gate tw (default %(default)s)")
+    r.add_argument("--speed-method", choices=("corr", "edge"), default="corr",
+                   help="2026-09-30, default corr (= the pre-registered run). edge: read the shift on dash edges")
+    r.add_argument("--baseline-max", type=int, default=1,
+                   help="edge only: longest baseline in samples, predicted from the one-sample shift (default 1 = off)")
+    r.add_argument("--step-auto", action="store_true",
+                   help="2026-09-30: choose the frame step from fps and cycle (see auto_step); overrides --step")
     r.add_argument("--lane-width-tol", type=float, default=None,
                    help="2026-09-30, default off (= the pre-registered run): drop windows whose ego-lane width at the "
                         "band bottom is more than this fraction from the clip median (e.g. 0.15)")
     args = ap.parse_args()
-    res = run(args.frames, args.fps, args.cycle_m, args.depth_cache, args.band_bottom, args.step, args.model,
+    step = auto_step(args.fps, args.cycle_m) if args.step_auto else args.step
+    res = run(args.frames, args.fps, args.cycle_m, args.depth_cache, args.band_bottom, step, args.model,
               args.duty, line_width_gate=args.line_width_gate, max_line_width_ratio=args.max_line_width_ratio,
-              lane_width_tol=args.lane_width_tol)
+              lane_width_tol=args.lane_width_tol, speed_method=args.speed_method, baseline_max=args.baseline_max)
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(json.dumps(res, indent=1))
     nvp = sum(1 for wd in res["windows"] if wd["vp_row"] is not None)
