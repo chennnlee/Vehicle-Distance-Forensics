@@ -24,12 +24,13 @@ Two numbers here are never used by the measurement, only to score it afterwards:
 AV2 imagery is already rectified -- the devkit projects with a bare pinhole matrix and
 never touches the published k1, k2, k3 -- so this only rescales and renames.  The scale
 factor divides fx, fy, cx, cy with it.  Verify the rectification independently before
-trusting it: `lane_line_fit.py` fits straight lines to the lane markings, and its residual
-is a few px on a rectified image and tens of px on a distorted one.
+trusting it: straight lane markings stay straight on a rectified image (a straight-line fit
+leaves a few px of residual there and tens of px on a distorted one).
 
 Ego speed comes from city_SE3_egovehicle (GPS/IMU).  The measurement does not use it; it
-is here to cross-check the assumed dash cycle, exactly as the project notes require of the
-Taiwanese clips ("週期勿信規範先驗 ... 有 GPS OSD 就先反驗").
+only cross-checks the dash cycle afterwards.  The cycle itself is the local legal value:
+US MUTCD 10 ft + 30 ft = 12.19 m in most AV2 cities, Caltrans 12 ft + 36 ft = 14.63 m in
+California (docs/ODOMETER_DESIGN.md section 2.1).
 
 Usage:
   python3 tools/av2_prepare.py --log data/input/av2/<log id> --scale 0.5
