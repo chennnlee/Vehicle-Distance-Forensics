@@ -48,6 +48,9 @@ def main():
     ap.add_argument("--log", required=True)
     ap.add_argument("--calib", default="", help="calib.json from av2_marking_calib.py")
     ap.add_argument("--lanes-json", default="", help="depth_dash_scale result whose windows give the lanes")
+    ap.add_argument("--no-lanes", action="store_true",
+                    help="2026-09-30: keep every vehicle detection (no lane test, no lane fitting of any kind); "
+                         "the scoring then picks the lanes from the lidar cuboid's lateral offset")
     ap.add_argument("--device", default=None, help="YOLO device, e.g. cpu (default: ultralytics' choice)")
     ap.add_argument("--frames-name", default="pinhole")
     ap.add_argument("--yolo", default="checkpoints/yolov8m-seg.pt")
@@ -65,7 +68,10 @@ def main():
 
     log = Path(args.log)
     cal = None
-    if args.lanes_json:
+    if args.no_lanes:
+        def lanes_at(pos):
+            return "all"
+    elif args.lanes_json:
         dash = json.loads(Path(args.lanes_json).read_text())
 
         def lanes_at(pos):
@@ -90,7 +96,8 @@ def main():
         lanes = lanes_at(pos)
         if lanes is None:
             continue
-        (la, lb), (ra, rb), y_h = lanes
+        if lanes != "all":
+            (la, lb), (ra, rb), y_h = lanes
         res = model.predict(str(fp), verbose=False, conf=args.conf, device=args.device)[0]
         if res.masks is None:
             continue
@@ -112,12 +119,13 @@ def main():
             sel = ys >= np.percentile(ys, 100.0 - args.contact_pct)
             px, py_band = float(np.median(xs[sel])), float(np.median(ys[sel]))
             py_max = float(poly[:, 1].max())
-            if py_max <= y_h + 1:
-                continue
-            left, right = la * py_max + lb, ra * py_max + rb
-            lane_w = right - left
-            if not (left - args.lane_widths * lane_w <= px <= right + args.lane_widths * lane_w):
-                continue
+            if lanes != "all":
+                if py_max <= y_h + 1:
+                    continue
+                left, right = la * py_max + lb, ra * py_max + rb
+                lane_w = right - left
+                if not (left - args.lane_widths * lane_w <= px <= right + args.lane_widths * lane_w):
+                    continue
             rows.append(dict(frame_idx=fp.stem, px=round(px, 1), py=round(py_band, 2),
                              py_max=round(py_max, 2), cls=int(cls), conf=round(float(cf), 3),
                              x0=round(float(x0), 1), y0=round(float(y0), 1),
@@ -125,6 +133,8 @@ def main():
                              mask_px=int(xs.size)))
 
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+    if not rows:
+        raise SystemExit(f"{log.name}: no target passed the selection; nothing written")
     with open(args.out, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=list(rows[0]))
         w.writeheader()
