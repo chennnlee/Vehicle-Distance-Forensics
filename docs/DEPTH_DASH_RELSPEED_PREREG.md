@@ -56,3 +56,17 @@ commit 之後,下列規則與程式參數不再更動;若必須更動,另開一�
 2. 本方法在這兩段的逐對自車速對 CAN 已評分過(MAE 8.5 / 7.9 km/h,`score_depth_dash_scale.py`)。
    本次的時窗中位數規則是在知道逐對讀值很吵之後訂的,但沒有看任何時窗級的結果。
 3. 參數(IoU 0.3、距離跳動 15%、5 點時窗、至少 3 筆自車速、25% 副結果門檻)都是寫程式前訂的,沒有試跑。
+
+## 追記(2026-09-30,登錄之後寫的)
+
+以下是登錄之後補的出處說明;上面登錄的內容一字未改。
+
+1. **2026-09-29 那次評分讀的雷達檔是組員程式匯出的**:當時 `tools/depth_dash_relspeed.py` 的評分
+   (`radar_in_lane`,約第 261 行)讀 `data/output/depth_benchmark/radar_<tag>.csv`,那是組員(chennnlee)的
+   `comma2k19_radar_export.py` 匯出的;§5 第 2 點對 CAN 的比較(MAE 8.5 / 7.9 km/h)讀的是由同一批雷達檔篩出的
+   `paired_*.csv`。
+2. **§5 第 1 點引用的「這批目標相對速度中位僅 0.35 m/s」是組員的數字**(出處 `docs/VALIDATION_STATUS.md`)。
+3. **§4 的本車道半寬 1.8 m** 經由 `depth_benchmark_targets.py` 承襲自組員的 `comma2k19_radar_eval.py`,不是自己的依據。
+   §4 的近場/遠場 32 m 分界同樣源自組員的遠場旗標(見 `docs/DEPTH_DASH_SCALE_PREREG.md` 追記第 3 點)。
+4. 方法本身(§1–§3)沒有用到組員的程式。
+5. 用自己的真值(`tools/c2k19_extract.py`)重評的結果記在 `docs/TERRY_RESEARCH_RECORD.md` §11.12。
