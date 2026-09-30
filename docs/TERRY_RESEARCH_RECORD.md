@@ -4,18 +4,47 @@
 同 repo 內另一位作者(`chennnlee`)的成果(管線 A/B、既有 demo、comma2k19 雷達驗證、報告產生器)
 不列在此;需要引用時會標明「既有成果」。
 
-**最後更新**:2026-09-29(§11:只用自己程式的尺度錨 + 由距離推自車速的盲測)
+**最後更新**:2026-09-30(獨立路線:只用自己的程式;移除用到組員程式的舊工具,原因見下一節)
 
-> 🔴 **2026-09-30 移除用到組員程式的舊工具**(不改寫歷史,舊版仍可在 git 紀錄查到,括號內是移除前最後一個 commit):
-> `tools/vanishing_point_range_calib.py`(b9bee2c,import 組員的 `dashcam_range_speed`、`odometer_distance_calib`)、
-> `tools/av2_marking_calib.py`(1f86253,呼叫組員的 `lane_line_fit.py`)、
-> `tools/av1_marking_run.py`(b9bee2c)、`tools/run_av1_val.sh`(b9bee2c)、`tools/run_av1_marking.sh`(862386f)、
-> `tools/run_av1_train.sh`(fef2c08)(這四支經由上面兩支間接用到)、
-> `tools/report/demo_c2k19_methods.py`(bf94bb1,import 組員的 `dashcam_range_speed`)。
-> 它們都屬於**舊方法 C**(時間差求 A + 組員的車道線擬合)與「標線 A 對原廠 A」的 AV1/AV2 驗證;
-> 本檔與其他文件中用這些工具得到的數字,一律視為舊方法的結果,**不放進大專生計畫**。
-> 現行方法(深度模型 + 虛線尺 `depth_dash_scale.py`、空間版方法 C `marking_geometry.py`、多車 `depth_dash_multicar.py`)
-> 不 import、不呼叫任何組員的程式;AV2 評分改用不需車道線的 `av2_targets.py --no-lanes`(見 §11.4 補註)。
+## 獨立路線(2026-09-30 起;為什麼有些舊工具被刪掉)
+
+**決定**:我在這個分支上的方法與評估,從 2026-09-29 起只用**我自己寫的程式**,加上**公開資料集**與
+**開發者官方釋出的模型**;不 import、不呼叫組員(`chennnlee`)的程式,也不讀他的程式產生的檔案。
+
+**為什麼走獨立路線**
+1. **國科會大專生研究計畫是個人計畫**:計畫書、方法、程式與數據都應該是我自己的。
+2. **舊方法 C 混用了組員的元件**:車道線擬合(`lane_line_fit.py`),以及「虛線流過兩列的時間差 × 碼表車速」
+   求尺度 A 的做法(`odometer_distance_calib.py`)。用它們做出的結果,無法清楚切分誰貢獻了什麼。
+3. **與其在每個數字旁邊標註來源,不如把方法重新做成完全獨立的版本**,讓每一個數字都能追溯到我自己的程式。
+4. 兩人合作的專題照常進行;專題裡組員的成果屬於組員,我需要引用時會標明「既有成果」。
+
+**做了哪些事**
+- **新方法(全部自己寫)**:深度模型 + 虛線尺(`tools/depth_dash_scale.py`:k = 法定虛線週期 ÷ 虛線在模型深度中量到的週期)、
+  只用標線幾何的空間版方法 C(`tools/marking_geometry.py`)、多車距離與追蹤(`tools/depth_dash_multicar.py`)。
+- **評估也不經過組員的程式**:comma2k19 的影格、CAN 與雷達改用自己的 `tools/c2k19_extract.py` 讀取;
+  AV2 的評分目標改成完全不需要車道線(`tools/av2_targets.py --no-lanes`,評分時用光達框的橫向位置決定算哪幾台車),
+  重評結果與原本相同(§11.4 補註)。
+- **移除 7 支執行時會用到組員程式的舊工具**(下表)。git 歷史**沒有改寫**,舊版本仍可查;
+  用這些工具得到的數字一律標為舊方法的結果,**不放進大專生計畫**。
+
+| 移除的檔案 | 用到組員的什麼 | 移除前最後一個 commit |
+|---|---|---|
+| `tools/vanishing_point_range_calib.py` | import `dashcam_range_speed`、`odometer_distance_calib`,呼叫 `lane_line_fit.py` | b9bee2c |
+| `tools/av2_marking_calib.py` | 呼叫 `lane_line_fit.py` | 1f86253 |
+| `tools/av1_marking_run.py` | 經由 `av2_marking_calib.py` | b9bee2c |
+| `tools/run_av1_val.sh`、`tools/run_av1_train.sh` | 經由 `av1_marking_run.py` | b9bee2c、fef2c08 |
+| `tools/run_av1_marking.sh` | 經由 `av2_marking_calib.py` | 862386f |
+| `tools/report/demo_c2k19_methods.py` | import `dashcam_range_speed` | bf94bb1 |
+
+- **仍在使用的外部東西都是公開或合作單位提供的**:資料集(comma2k19、Argoverse 2、海盛提供的案例影片、
+  自己整理的網路行車紀錄器影片)、深度模型(官方程式與權重,雜湊已核對)、YOLOv8(官方權重,雜湊已核對)、
+  ByteTrack / BoT-SORT(Ultralytics 內建的公開演算法)。
+
+**怎麼讀這份紀錄**:§1–§10 記錄的是 2026-09-16 至 09-28 的工作,其中方法 C 與 AV1/AV2 的「標線 A 對原廠 A」驗證
+用到上述組員的元件,屬於舊方法;§11 起是獨立路線。
+
+**還沒完成**:comma2k19 的舊評分與舊 benchmark 仍讀組員程式匯出的雷達檔;之後用正確的雷達偏移重算時,
+一起改用 `c2k19_extract.py` 的真值。
 
 ---
 
