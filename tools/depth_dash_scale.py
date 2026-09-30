@@ -534,11 +534,18 @@ def profile_shift(g1, p1, g2, p2, smax, dz, min_corr):
 # ------------------------------------------------------------------ driver
 
 def run(frames_dir, fps, cycle_m, depth_cache, band_bottom, step=2, model="da3_metric",
-        duty_ratio=0.4, p=PARAMS, fx=None, line_width_gate="off", max_line_width_ratio=None):
+        duty_ratio=0.4, p=PARAMS, fx=None, line_width_gate="off", max_line_width_ratio=None,
+        lane_width_tol=None):
     """line_width_gate (2026-09-30): "off" (default, the pre-registered behaviour, output unchanged),
     "measure" (record painted width / lane width per line, drop nothing -- for roads outside Taiwan),
     "tw" (Taiwan: also drop a line's cycles where the ratio is over max_line_width_ratio, default
-    LINE_WIDTH["max_ratio_tw"]). See the module docstring."""
+    LINE_WIDTH["max_ratio_tw"]). See the module docstring.
+    lane_width_tol (2026-09-30, None = off = the pre-registered behaviour): a window whose ego-lane width
+    at the band-bottom row differs from the clip median by more than this fraction is treated like one
+    that failed the crossing-row gate. On a flat road a fixed row is a fixed distance ahead, so that
+    width in pixels only follows the lane width (3.25-3.75 m) and not where the car sits in the lane;
+    a car body, a gore-area stripe or the line under the car during a lane change taken as an ego-lane
+    line moves it by far more."""
     if line_width_gate not in ("off", "measure", "tw"):
         raise ValueError(f"line_width_gate {line_width_gate!r}: off, measure or tw")
     frames = list_frames(Path(frames_dir))
@@ -555,6 +562,21 @@ def run(frames_dir, fps, cycle_m, depth_cache, band_bottom, step=2, model="da3_m
                 wd["vp_row_rejected"] = wd["vp_row"]
                 wd["vp_row"] = None
     y1 = track["det_rows"][1]
+    lane_gate = None
+    if lane_width_tol is not None:
+        def _lane_px(wd):
+            return (wd["right"]["a"] - wd["left"]["a"]) * y1 + wd["right"]["b"] - wd["left"]["b"]
+        both = [wd for wd in track["windows"] if wd["vp_row"] is not None and wd.get("left") and wd.get("right")]
+        lane_gate = dict(tol=float(lane_width_tol), rejected=0)
+        if both:
+            wmed = float(np.median([_lane_px(wd) for wd in both]))
+            lane_gate["median_px"] = round(wmed, 1)
+            for wd in both:
+                lw = _lane_px(wd)
+                if abs(lw / wmed - 1) > lane_width_tol:
+                    wd["lane_width_rejected"] = round(float(lw), 1)
+                    wd["vp_row"] = None
+                    lane_gate["rejected"] += 1
     half_px = max(4, int(round(p["band_half_px"] * h / 1080)))
     cache = None if depth_cache is None else Path(depth_cache)
     backend = None
@@ -621,6 +643,8 @@ def run(frames_dir, fps, cycle_m, depth_cache, band_bottom, step=2, model="da3_m
                periods=periods)
     if lw is not None:
         res["line_width"] = lw
+    if lane_gate is not None:
+        res["lane_width_gate"] = lane_gate
     blk = max(1, int(round(p["ci_block_s"] * fps / step)))
     rng = np.random.default_rng(0)
     sides = {}
@@ -705,9 +729,13 @@ def main():
                         "設置規則第 189-1 條). measure: record the ratio only (use outside Taiwan, e.g. comma2k19/AV1/AV2)")
     r.add_argument("--max-line-width-ratio", type=float, default=LINE_WIDTH["max_ratio_tw"],
                    help="threshold of --line-width-gate tw (default %(default)s)")
+    r.add_argument("--lane-width-tol", type=float, default=None,
+                   help="2026-09-30, default off (= the pre-registered run): drop windows whose ego-lane width at the "
+                        "band bottom is more than this fraction from the clip median (e.g. 0.15)")
     args = ap.parse_args()
     res = run(args.frames, args.fps, args.cycle_m, args.depth_cache, args.band_bottom, args.step, args.model,
-              args.duty, line_width_gate=args.line_width_gate, max_line_width_ratio=args.max_line_width_ratio)
+              args.duty, line_width_gate=args.line_width_gate, max_line_width_ratio=args.max_line_width_ratio,
+              lane_width_tol=args.lane_width_tol)
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(json.dumps(res, indent=1))
     nvp = sum(1 for wd in res["windows"] if wd["vp_row"] is not None)
