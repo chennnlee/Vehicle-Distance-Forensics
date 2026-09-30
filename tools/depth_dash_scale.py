@@ -667,7 +667,7 @@ def edge_speeds(per_frame, idx, sides, k, cycle_m, fps, step, baseline_max=1, p=
 
 def run(frames_dir, fps, cycle_m, depth_cache, band_bottom, step=2, model="da3_metric",
         duty_ratio=0.4, p=PARAMS, fx=None, line_width_gate="off", max_line_width_ratio=None,
-        lane_width_tol=None, speed_method="corr", baseline_max=1, lane_curve=False):
+        lane_width_tol=None, speed_method="corr", baseline_max=1, lane_curve=False, line_angle_tol=None):
     """line_width_gate (2026-09-30): "off" (default, the pre-registered behaviour, output unchanged),
     "measure" (record painted width / lane width per line, drop nothing -- for roads outside Taiwan),
     "tw" (Taiwan: also drop a line's cycles where the ratio is over max_line_width_ratio, default
@@ -680,7 +680,11 @@ def run(frames_dir, fps, cycle_m, depth_cache, band_bottom, step=2, model="da3_m
     line moves it by far more.
     speed_method (2026-09-30): "corr" (default, the pre-registered behaviour) or "edge" (shift read on dash
     edges, see edge_speeds; baseline_max > 1 adds the long baseline).
-    lane_curve (2026-09-30, off by default): lines may bend (lines_in_window), and the profiles follow them."""
+    lane_curve (2026-09-30, off by default): lines may bend (lines_in_window), and the profiles follow them.
+    line_angle_tol (2026-09-30, degrees, None = off): a window where either ego-lane line's angle in the image
+    differs from the median of the same side in the windows within +-2 s by more than this is treated like one
+    that failed the crossing-row gate. The ego-lane lines turn slowly; a jump means another edge was taken
+    (a car body, a gore stripe) or the car is changing lanes, when the pair is not the lane either."""
     if speed_method not in ("corr", "edge"):
         raise ValueError(f"speed_method {speed_method!r}: corr or edge")
     if line_width_gate not in ("off", "measure", "tw"):
@@ -699,6 +703,25 @@ def run(frames_dir, fps, cycle_m, depth_cache, band_bottom, step=2, model="da3_m
                 wd["vp_row_rejected"] = wd["vp_row"]
                 wd["vp_row"] = None
     y1 = track["det_rows"][1]
+    angle_gate = None
+    if line_angle_tol is not None:
+        ws = track["windows"]
+        hwin = max(1, int(round(2.0 / p["win_hop_s"])))
+        angle_gate = dict(tol_deg=float(line_angle_tol), half_win=hwin, rejected=0)
+        bad = set()
+        for side in ("left", "right"):
+            ang = [float(np.degrees(np.arctan(line_slope(wd[side], wd[side].get("y_ref", 0.0)))))
+                   if (wd["vp_row"] is not None and wd.get(side)) else None for wd in ws]
+            for i, x in enumerate(ang):
+                if x is None:
+                    continue
+                nb = [ang[j] for j in range(max(0, i - hwin), min(len(ws), i + hwin + 1)) if j != i and ang[j] is not None]
+                if len(nb) >= 3 and abs(x - float(np.median(nb))) > line_angle_tol:
+                    bad.add(i)
+                    ws[i].setdefault("angle_rejected", []).append(side)
+        for i in sorted(bad):
+            ws[i]["vp_row"] = None
+            angle_gate["rejected"] += 1
     lane_gate = None
     if lane_width_tol is not None:
         def _lane_px(wd):
@@ -782,6 +805,8 @@ def run(frames_dir, fps, cycle_m, depth_cache, band_bottom, step=2, model="da3_m
         res["line_width"] = lw
     if lane_gate is not None:
         res["lane_width_gate"] = lane_gate
+    if angle_gate is not None:
+        res["line_angle_gate"] = angle_gate
     blk = max(1, int(round(p["ci_block_s"] * fps / step)))
     rng = np.random.default_rng(0)
     sides = {}
@@ -873,6 +898,9 @@ def main():
                    help="2026-09-30, default corr (= the pre-registered run). edge: read the shift on dash edges")
     r.add_argument("--baseline-max", type=int, default=1,
                    help="edge only: longest baseline in samples, predicted from the one-sample shift (default 1 = off)")
+    r.add_argument("--line-angle-tol", type=float, default=None,
+                   help="2026-09-30, default off: drop windows where an ego-lane line turns more than this many degrees "
+                        "against the same side's median within +-2 s (e.g. 10)")
     r.add_argument("--lane-curve", action="store_true",
                    help="2026-09-30, default off: let the tracked lines bend (quadratic), so profiles follow curves")
     r.add_argument("--step-auto", action="store_true",
@@ -885,7 +913,7 @@ def main():
     res = run(args.frames, args.fps, args.cycle_m, args.depth_cache, args.band_bottom, step, args.model,
               args.duty, line_width_gate=args.line_width_gate, max_line_width_ratio=args.max_line_width_ratio,
               lane_width_tol=args.lane_width_tol, speed_method=args.speed_method, baseline_max=args.baseline_max,
-              lane_curve=args.lane_curve)
+              lane_curve=args.lane_curve, line_angle_tol=args.line_angle_tol)
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(json.dumps(res, indent=1))
     nvp = sum(1 for wd in res["windows"] if wd["vp_row"] is not None)
