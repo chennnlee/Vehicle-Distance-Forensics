@@ -2,7 +2,7 @@
 """Every car in view, not just the one ahead: distance from the depth model x k, followed with a tracker.
 
 2026-09-30. It continues depth_dash_scale.py: the scale k, the tracked ego-lane lines and the ego speed come
-from a dash-scale result, nothing here re-measures them. docs/DEPTH_DASH_V2_PREREG.md (draft) registers it.
+from a dash-scale result, nothing here re-measures them. docs/DEPTH_DASH_V2_PREREG.md in github.com/terrytjh/Monocular-Depth-Vehicle-Distance registers it.
 
   track    YOLOv8m-seg (official Ultralytics weights; car, bus, truck) on every frame, all boxes at det_conf
            stored, with ByteTrack ids (Zhang et al., ECCV 2022; Ultralytics' default bytetrack.yaml).
@@ -538,7 +538,7 @@ def assemble(pairs, ego_rows, found, total, reach, cyc, off, bin_s, extra=None):
 
 def _c2k19_dev():
     """Segments whose answers may be opened without a seal: seg10 / seg21, the four pilot segments of 2026-09-30,
-    and the development side of docs/DEPTH_DASH_V2_SPLIT.txt. The blind side of that file is not in this set."""
+    and the development side of docs/DEPTH_DASH_V2_SPLIT.txt (in github.com/terrytjh/Monocular-Depth-Vehicle-Distance). The blind side of that file is not in this set."""
     dev = {"b0c9d2329ad1606b_2018-07-30--13-44-30_10", "b0c9d2329ad1606b_2018-08-15--09-01-03_21",
            "b0c9d2329ad1606b_2018-08-02--16-41-38_13", "b0c9d2329ad1606b_2018-08-17--12-07-08_35",
            "99c94dc769b5d96e_2018-05-01--10-47-27_26", "99c94dc769b5d96e_2018-05-13--12-07-39_24"}

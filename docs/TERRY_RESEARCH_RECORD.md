@@ -7,9 +7,11 @@
 
 **最後更新**:2026-09-30(獨立路線:只用自己的程式;移除用到組員程式的舊工具,原因見下一節;舊方法各節加上標示)
 
+**之後的工作**:2026-09-30 晚起,大專生計畫的第二版(登錄、盲測、結果)與之後的版本都在我自己的 repo:github.com/terrytjh/Monocular-Depth-Vehicle-Distance。本分支停在搬過去之前;下文提到的 `docs/DEPTH_DASH_V2_*` 檔都在那個 repo。
+
 ## 獨立路線(2026-09-30 起;為什麼有些舊工具被刪掉)
 
-**決定**:我在這個分支上的方法與評估,從 2026-09-29 起只用**我自己寫的程式**,加上**公開資料集**與
+**決定**:我在這個分支上的方法與評估,從 2026-09-30 起只用**我自己寫的程式**,加上**公開資料集**與
 **開發者官方釋出的模型**;不 import、不呼叫組員(`chennnlee`)的程式,也不讀他的程式產生的檔案。
 
 **為什麼走獨立路線**
@@ -24,13 +26,13 @@
   只用標線幾何的空間版方法 C(`tools/marking_geometry.py`)、多車距離與追蹤(`tools/depth_dash_multicar.py`)。
 - **評估也不經過組員的程式**:comma2k19 的影格、CAN 與雷達改用自己的 `tools/c2k19_extract.py` 讀取;
   AV2 的評分目標改成完全不需要車道線(`tools/av2_targets.py --no-lanes`,評分時用光達框的橫向位置決定算哪幾台車),
-  重評結果與原本相同(§11.4 補註)。
+  重評結果相同或差不到 0.5 個百分點(§11.4 補註)。
 - **移除 7 支執行時會用到組員程式的舊工具**(下表)。git 歷史**沒有改寫**,舊版本仍可查;
   用這些工具得到的數字一律標為舊方法的結果,**不放進大專生計畫**。
 
 | 移除的檔案 | 用到組員的什麼 | 移除前最後一個 commit |
 |---|---|---|
-| `tools/vanishing_point_range_calib.py` | import `dashcam_range_speed`、`odometer_distance_calib`,呼叫 `lane_line_fit.py` | b9bee2c |
+| `tools/vanishing_point_range_calib.py` | import `dashcam_range_speed`、`odometer_distance_calib`;地平線用 `lane_line_fit.py` 的輸出(`--y-h`) | b9bee2c |
 | `tools/av2_marking_calib.py` | 經 subprocess 呼叫 `lane_line_fit.py` 與 `vanishing_point_range_calib.py`(後者 import 組員的 `odometer_distance_calib`、`dashcam_range_speed`) | 1f86253 |
 | `tools/av1_marking_run.py` | 經由 `av2_marking_calib.py` | b9bee2c |
 | `tools/run_av1_val.sh`、`tools/run_av1_train.sh` | 經由 `av1_marking_run.py` | b9bee2c、fef2c08 |
@@ -80,7 +82,7 @@
 
 **查核怎麼做的**(2026-09-30):
 - 現行方法用到的 14 支程式,依 git 紀錄全部由我建立。沿 import 往下追,只會追到這 14 支。
-  組員寫過的 39 支工具,沒有一支被 import 或執行。
+  組員建立的 41 支工具(`tools/` 底下的 .py / .sh / .js),沒有一支被 import 或執行。
 - 程式裡出現組員工具名稱的地方,只有兩種:說明文字寫明「不使用」,以及現行方法不會傳入的選項(`--calib`)。
 - 2026-09-29 封存的 comma2k19 結果當時讀的是較早準備的影格。改用 `c2k19_extract.py` 解出的影格和自己重算的深度圖重跑,
   k 與每一筆速度都和封存值完全相同,所以結果不依賴那批影格是誰準備的。
@@ -1139,10 +1141,10 @@ AV2 有光達的 4 支只有 1 支通過(cf5aaa11 CI 3.4% 差一點、dc9077b9 /
 | 20251230 002(GDR E350 白天高速) | 7/8 | **1.36** | −0.89 | 86% | 0.87 |
 | 20251230 006(GDR E350 白天高速) | 12/13 | **3.62** | +2.79 | 75% | 1.34 |
 | 20251230 五案合計 | 19/54 | 2.79 | +1.44 | 79% | |
-| 20251029 113-44-07 | 5/6 | 36.6 | +36.6 | 0% | |
+| 20251029 E 案 | 5/6 | 36.6 | +36.6 | 0% | |
 
 - 003(Mio 超廣角)CI 11.9%、004(夜間市區)抓不到線、005 CI 3.7% → 拒發。
-- **113-44-07 照規則算失敗**。已知該片被剪掉 60 秒、人工報表時基錯誤(先前三方比對應 ×2.899);
+- **E 案照規則算失敗**。已知該片被剪掉 60 秒、人工報表時基錯誤(先前三方比對應 ×2.899);
   乘上後 4/5 段在 4 km/h 內——**這是事後用外部資訊,不列入盲測成績**。
 - comma2k19 自車速對 CAN 逐對 MAE 8.5 / 7.9 km/h(逐對、未平均,且非盲)。
   (CAN 值讀自組員匯出的 `paired_*.csv`;自己的真值重評見 §11.12。)
@@ -1306,4 +1308,4 @@ AV2 c865c156 的距離(1.64%)不受影響:目標已改成不做車道擬合(§11
 - **自車速**:封存的相關法在 comma2k19 很差。第二版改用虛線邊緣加長基線,開發集每秒 MAE 約 5–6 km/h,
   仍是最弱的一項。
 - 第二版(引擎蓋排除、BoT-SORT、1.6 秒時窗、每個速度附 95% 範圍、依方位配對的評分)在 `docs/DEPTH_DASH_V2_PREREG.md`
-  (草稿)登錄,將在沒有人看過的 comma2k19 段與 AV2 第 1 步四支上盲測。開發集的數字(不是證據)記在 `docs/TERRY_DEV_LOG.md`。
+  登錄(github.com/terrytjh/Monocular-Depth-Vehicle-Distance),將在沒有人看過的 comma2k19 段與 AV2 第 1 步四支上盲測。開發集的數字(不是證據)記在 `docs/TERRY_DEV_LOG.md`。

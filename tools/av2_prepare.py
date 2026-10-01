@@ -30,7 +30,7 @@ leaves a few px of residual there and tens of px on a distorted one).
 Ego speed comes from city_SE3_egovehicle (GPS/IMU).  The measurement does not use it; it
 only cross-checks the dash cycle afterwards.  The cycle itself is the local legal value:
 US MUTCD 10 ft + 30 ft = 12.19 m in most AV2 cities, Caltrans 12 ft + 36 ft = 14.63 m in
-California (docs/ODOMETER_DESIGN.md section 2.1).
+California (Caltrans Standard Plan A20A).
 
 Usage:
   python3 tools/av2_prepare.py --log data/input/av2/<log id> --scale 0.5
