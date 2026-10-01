@@ -6,15 +6,6 @@
 
 ## 成果展示
 
-
-
-https://github.com/user-attachments/assets/83700b90-3ecf-4527-bca8-598f89717c22
-
-
-
-https://github.com/user-attachments/assets/67493732-938b-49a3-a3e0-4eb19a2c54c7
-
-
 ![行車紀錄器量測示範:高速公路上多台車的距離與時速](docs/media/demo_close_traffic.gif)
 
 - **頂端**:自己的車速,由車道虛線量得。
@@ -23,7 +14,15 @@ https://github.com/user-attachments/assets/67493732-938b-49a3-a3e0-4eb19a2c54c7
 
 影像來自 [comma2k19](https://github.com/commaai/comma2k19) 公開資料集(MIT 授權),這台車上裝有原廠雷達,可以拿來對照。這段 10 秒裡,畫面上能和雷達對上的時速標籤共 49 個,誤差都在 10 km/h 以內;自己的車速和車上定位系統平均相差 2.4 km/h。
 
-完整影片(各 10 秒):[多車近距離](docs/media/demo_close_traffic.mp4)、[跟車](docs/media/demo_following.mp4)。
+完整影片(各 10 秒):
+
+**多車近距離**:高速公路上好幾台車開到 6–27 公尺內,每台車都標出距離與時速。
+
+https://github.com/user-attachments/assets/67493732-938b-49a3-a3e0-4eb19a2c54c7
+
+**跟車**:跟著同一台前車開 10 秒,前車的時速和車上雷達量到的相差約 1 km/h。
+
+https://github.com/user-attachments/assets/83700b90-3ecf-4527-bca8-598f89717c22
 
 專題實際處理的台灣案例來自交通事故鑑識案件,影片不公開,所以這裡用公開資料集展示。
 
