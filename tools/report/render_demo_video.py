@@ -12,7 +12,7 @@ Labels refresh every --hold frames so the digits stay readable; the values are t
 per-frame measurements at the refresh frame, not smoothed or edited.
 
   python3 tools/report/render_demo_video.py --frames-dir <frames> --tracks <run>/tracks.json \
-      --fps 20 --start-s 22 --end-s 36 --out demo.mp4 --gif demo.gif
+      --fps 20 --start-s 26 --end-s 36 --out demo.mp4 --webp demo.webp
 """
 from __future__ import annotations
 
@@ -55,6 +55,9 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--gif", default="", help="Also write a GIF preview.")
     ap.add_argument("--gif-width", type=int, default=720)
     ap.add_argument("--gif-fps", type=int, default=10)
+    ap.add_argument("--webp", default="", help="Also write an animated WebP preview (smoother and smaller than GIF).")
+    ap.add_argument("--webp-width", type=int, default=800)
+    ap.add_argument("--webp-quality", type=int, default=80)
     return ap.parse_args()
 
 
@@ -157,6 +160,12 @@ def main() -> None:
         subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(out), "-i", str(pal), "-lavfi",
                         vf + " [x]; [x][1:v] paletteuse=dither=bayer:bayer_scale=4", a.gif], check=True)
         print(f"saved: {a.gif} ({Path(a.gif).stat().st_size / 1e6:.1f} MB)")
+    if a.webp:
+        subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(out), "-vf",
+                        f"fps={a.fps:g},scale={a.webp_width}:-1:flags=lanczos", "-c:v", "libwebp_anim",
+                        "-lossless", "0", "-q:v", str(a.webp_quality), "-compression_level", "4", "-loop", "0", a.webp],
+                       check=True)
+        print(f"saved: {a.webp} ({Path(a.webp).stat().st_size / 1e6:.1f} MB)")
     shutil.rmtree(tmp, ignore_errors=True)
 
 
