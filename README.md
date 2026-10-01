@@ -6,6 +6,15 @@
 
 ## 成果展示
 
+
+
+https://github.com/user-attachments/assets/83700b90-3ecf-4527-bca8-598f89717c22
+
+
+
+https://github.com/user-attachments/assets/67493732-938b-49a3-a3e0-4eb19a2c54c7
+
+
 ![行車紀錄器量測示範:高速公路上多台車的距離與時速](docs/media/demo_close_traffic.gif)
 
 - **頂端**:自己的車速,由車道虛線量得。
