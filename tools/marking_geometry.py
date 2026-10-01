@@ -40,8 +40,8 @@ Then
              A reading more than speed_dev from its neighbours' median (+-speed_med_s) is dropped:
              a car cannot change speed that fast, so it is a false correlation peak.
 
-How this differs from the teammate's method C (odometer_distance_calib.py; not opened, not
-imported): there A comes from TIME -- the lag of a dash passing two fixed image rows, times the
+How this differs from the old method C (odometer_distance_calib.py, shared project code not
+written by me; not opened, not imported): there A comes from TIME -- the lag of a dash passing two fixed image rows, times the
 ego speed of the dash odometer. Here A comes from SPACE within single frames -- how many image
 rows one legal cycle spans at each distance -- and needs no speed, no fixed rows, no temporal
 period. Lane lines and their crossing come from depth_dash_scale (Terry), not lane_line_fit.py.

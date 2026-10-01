@@ -94,7 +94,7 @@ def main():
     ap.add_argument("--log", required=True)
     ap.add_argument("--calib", default="",
                     help="calib.json of the marking calibration, only for the method C columns; omit to score the "
-                         "depth models alone (2026-09-30: that calibration runs lane_line_fit.py, a teammate's tool)")
+                         "depth models alone (2026-09-30: that calibration runs lane_line_fit.py, shared project code not written by me)")
     ap.add_argument("--pred", required=True, help="glob of prediction CSVs from depth_model_benchmark run")
     ap.add_argument("--frames-name", default="pinhole")
     ap.add_argument("--min-iou", type=float, default=0.5)

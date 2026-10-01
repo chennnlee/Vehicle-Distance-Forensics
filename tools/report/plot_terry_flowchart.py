@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Flowchart of Terry's part of the project, drawn in the same visual language as the
-teammate's pipeline-B chart (red border = implemented by me, grey = existing model).
+"""Flowchart of Terry's part of the project (red border = implemented by me, grey = existing
+model).
 
-A third style marks the teammate's components that this part reuses -- the cross-row lag
+A third style marks the shared project components (not written by me) that this part reuses -- the cross-row lag
 measurement (odometer_distance_calib.py), the lane-line fit and the ego-speed odometer --
 so the chart does not claim them.
 
@@ -122,7 +122,7 @@ def draw(out_dir: Path):
 
     # --- lane 4: ego-speed validation ------------------------------------------------
     header(ax, 14, 16.3, "Ego-speed validation: Haisheng batch 2")
-    box(ax, 14, 6, 30, 13, "Ego speed\n(teammate's odometer)", "mate")
+    box(ax, 14, 6, 30, 13, "Ego speed\n(shared odometer)", "mate")
     box(ax, 34, 6, 52, 13, "Same-frame comparison\nper 30 m segment", "mine")
     box(ax, 57, 6, 78, 13, "Manual frame-count reports\nparse + self-check", "mine")
     arrow(ax, (30, 9.5), (34, 9.5))
@@ -139,7 +139,7 @@ def draw(out_dir: Path):
     ly = 0.3
     for x, style, label in ((1.5, "mine", "Implemented by me"),
                             (23.5, "model", "Existing model, used as-is"),
-                            (49, "mate", "Teammate's component, reused")):
+                            (49, "mate", "Shared component, reused")):
         s = STYLES[style]
         ax.add_patch(FancyBboxPatch((x, ly - 0.9), 3.2, 1.8, boxstyle="square,pad=0",
                                     ec=s["ec"], fc=s["fc"], lw=s["lw"], ls=s["ls"]))

@@ -2,7 +2,7 @@
 
 本檔是 `docs/TERRY_RESEARCH_RECORD.md` §10 的**完整書目附錄**。§10 寫結論,這裡列每一筆。
 
-> **2026-09-30 補註**:本清單在 2026-09-28 寫成時,對照的是**舊方法 C**——它的尺度 A 來自組員(chennnlee)的時間差法(虛線流過兩個固定影像列的時間差 × 碼表車速,`odometer_distance_calib.py`)與車道線擬合(`lane_line_fit.py`)。各條目的「與我們的差別」已改寫成對照我現行的方法(見「現行方法」一節)。
+> **2026-09-30 補註**:本清單在 2026-09-28 寫成時,對照的是**舊方法 C**——它的尺度 A 來自專題共用程式的時間差法(虛線流過兩個固定影像列的時間差 × 碼表車速,`odometer_distance_calib.py`)與車道線擬合(`lane_line_fit.py`),兩者都不是我寫的。各條目的「與我們的差別」已改寫成對照我現行的方法(見「現行方法」一節)。
 > 書目、連結、「它做什麼」、「關係判定」與審查更正的書目內容保留原樣(「關係判定」是 2026-09-27 對照舊方法 C 的判定);審查更正、未驗證清單與一處「它做什麼」裡第一人稱的取回紀錄,改寫成中性的核對說明。
 
 **驗證協定**:從五個搜尋角度分別檢索,規則是「只列取得頁面的論文」;
@@ -31,13 +31,13 @@
 - **前車與多車**(`tools/depth_dash_relspeed.py`、`tools/depth_dash_multicar.py`):YOLO 框/遮罩處的深度 × k;相對速度 = 距離對時間的斜率。
 - **空間版方法 C**(`tools/marking_geometry.py`):只用標線幾何;地平線 = 本車道兩條車道線的交點,`A = L / P_u`(虛線在 `u = 1/(y − y_h)` 上的空間週期,單幀量),`d = A/(py − y_h)`。它屬於下面「尺度錨相關」一節的空間量法前案,不宣稱為新方法。
 
-**定位**:以**空間**方式量法定虛線、當縱向尺度錨,是前案(「尺度錨相關」一節的 Schoepflin & Dailey 2003、Cathey & Dailey 2005/2006 屬這一類;Ansari et al. 2018 提出以標準尺寸標線加已知掛高定尺度)。我的貢獻是**在單目度量深度模型自己的深度裡量法定虛線的週期,用它定該模型的公尺尺度**(`k = L / P`),不需要相機內參、不需要地面平面,並由同一條校正後的深度剖面讀自車速。本調查沒有查到任何論文或專利用法定標線常數定深度模型的尺度(`TERRY_RESEARCH_RECORD.md` §10.2 第 ③ 列;「深度模型的絕對尺度錨定」一節最接近的是以平均車長定常數的 FARSEC,與以車牌橫向尺寸定尺度的兩篇)。「虛線流過兩個固定影像列的時間差、車速消掉」這個量法是組員 chennnlee 的(`odometer_distance_calib.py`,2026-08-19),固定影像列時間週期的標線碼表(`dashcam_range_speed.py`)也是組員的,兩者都不是我的貢獻。
+**定位**:以**空間**方式量法定虛線、當縱向尺度錨,是前案(「尺度錨相關」一節的 Schoepflin & Dailey 2003、Cathey & Dailey 2005/2006 屬這一類;Ansari et al. 2018 提出以標準尺寸標線加已知掛高定尺度)。我的貢獻是**在單目度量深度模型自己的深度裡量法定虛線的週期,用它定該模型的公尺尺度**(`k = L / P`),不需要相機內參、不需要地面平面,並由同一條校正後的深度剖面讀自車速。本調查沒有查到任何論文或專利用法定標線常數定深度模型的尺度(`TERRY_RESEARCH_RECORD.md` §10.2 第 ③ 列;「深度模型的絕對尺度錨定」一節最接近的是以平均車長定常數的 FARSEC,與以車牌橫向尺寸定尺度的兩篇)。「虛線流過兩個固定影像列的時間差、車速消掉」這個量法出自專題共用的程式(`odometer_distance_calib.py`,2026-08-19),固定影像列時間週期的標線碼表(`dashcam_range_speed.py`)也是,兩者都不是我的貢獻。
 
 ## 最接近舊方法 C 的四筆(⚠ 四篇的「關係」審查後全被判定講太滿,**沒有一篇真的是同一方法**)
 
 (4 筆)
 
-> 2026-09-30:這四筆的「關係判定」是對照**舊方法 C** 做的(尺度 A 來自組員 chennnlee 的列間時間差法,見檔首補註),保留原樣。對照我現行的方法時,最接近的前案是「尺度錨相關」一節的空間量法(Schoepflin & Dailey 2003、Cathey & Dailey 2005/2006、Ansari et al. 2018)與「深度模型的絕對尺度錨定」一節的 FARSEC。
+> 2026-09-30:這四筆的「關係判定」是對照**舊方法 C** 做的(尺度 A 來自專題共用程式的列間時間差法,見檔首補註),保留原樣。對照我現行的方法時,最接近的前案是「尺度錨相關」一節的空間量法(Schoepflin & Dailey 2003、Cathey & Dailey 2005/2006、Ansari et al. 2018)與「深度模型的絕對尺度錨定」一節的 FARSEC。
 
 ### A novel approach for the online initial calibration of extrinsic parameters for a car-mounted camera
 
@@ -47,8 +47,8 @@
 - **連結**:https://api.openalex.org/works/doi:10.1109/itsc.2009.5309853
 - **關係判定**:`same_method (check: overstated)`　引文屬實:是
 - **它做什麼**:Online initial extrinsic calibration of an onboard camera. A lane-marking detector samples the image at fixed vertical coordinates ("scanlines"), producing one-dimensional time series; correlation analysis between those series plus the vehicle's velocity gives the ground distance between the scanlines; a Gauss-Newton fit then solves camera height, pitch and roll by matching those distances to a pinhole back-projection onto the ground plane.
-- **與我們的差別**:它的機制(固定影像列 → 一維時間訊號 → 相關 → 兩列之間的地面距離)與舊方法 C 借用的組員 chennnlee 時間差法相近,那部分不是我的方法。對照現行方法:它需要車速當外部輸入、在時間域比兩列的延遲,解的是相機掛高、俯仰與側傾,因此需要內參;深度模型 × 虛線尺在單幀的深度剖面上以空間方式量法定虛線週期,k = L / P 直接定深度模型的尺度,不需要車速、內參或外參。它沒有深度模型。
-- ⚠ **審查更正**:S. Hold, S. Görmer (索引庫拼成 "Gormer"), A. Kummert, M. Meuter, S. Müller-Schneiders, "A novel approach for the online initial calibration of extrinsic parameters for a car-mounted camera," 2009 12th International IEEE Conference on Intelligent Transportation Systems (ITSC), St. Louis, MO, 2009-10-04~07, pp. 1-6, doi:10.1109/ITSC.2009.5309853. — 引用欄位無誤,不需更正。要更正的是**關係標籤**:不是 same_method,而是「**只對舊方法 C 的 part …**」(原紀錄在此截斷;舊方法 C 的這一部分是列間時間差量尺度,屬組員 chennnlee 的方法)
+- **與我們的差別**:它的機制(固定影像列 → 一維時間訊號 → 相關 → 兩列之間的地面距離)與舊方法 C 借用的時間差法(專題共用的程式)相近,那部分不是我的方法。對照現行方法:它需要車速當外部輸入、在時間域比兩列的延遲,解的是相機掛高、俯仰與側傾,因此需要內參;深度模型 × 虛線尺在單幀的深度剖面上以空間方式量法定虛線週期,k = L / P 直接定深度模型的尺度,不需要車速、內參或外參。它沒有深度模型。
+- ⚠ **審查更正**:S. Hold, S. Görmer (索引庫拼成 "Gormer"), A. Kummert, M. Meuter, S. Müller-Schneiders, "A novel approach for the online initial calibration of extrinsic parameters for a car-mounted camera," 2009 12th International IEEE Conference on Intelligent Transportation Systems (ITSC), St. Louis, MO, 2009-10-04~07, pp. 1-6, doi:10.1109/ITSC.2009.5309853. — 引用欄位無誤,不需更正。要更正的是**關係標籤**:不是 same_method,而是「**只對舊方法 C 的 part …**」(原紀錄在此截斷;舊方法 C 的這一部分是列間時間差量尺度,屬專題共用程式的方法,不是我的)
 
 ### Automatic estimation of vehicle speed from uncalibrated video sequences
 
@@ -68,7 +68,7 @@
 - **連結**:https://patents.google.com/patent/US10776942B2/en
 - **關係判定**:`same_method (check: overstated)`　引文屬實:是
 - **它做什麼**:Determines the roll angle of a vehicle-mounted camera from two world points whose separation D is known. To get D it detects dashed/intermittent lane markers as "rectangular" brightness signals in multiple fixed scan-lines and autocorrelates those signals to recover timing, which is turned into a distance using the vehicle speed; alternatively D is taken as the standard legal length of a lane marker.
-- **與我們的差別**:共用的元素是固定掃描線上的標線亮度訊號與標準標線長度;它以時間訊號加車速換算距離,輸出的是側傾角 ρ,掛高視為已知。這套「固定掃描線 + 相關」與舊方法 C 借用的組員 chennnlee 時間差法較近。現行方法不做側傾或外參標定,也不用固定掃描線的時間訊號:法定週期在深度模型的深度剖面上以空間方式量出,用來定模型的尺度。它沒有深度模型。
+- **與我們的差別**:共用的元素是固定掃描線上的標線亮度訊號與標準標線長度;它以時間訊號加車速換算距離,輸出的是側傾角 ρ,掛高視為已知。這套「固定掃描線 + 相關」與舊方法 C 借用的時間差法(專題共用的程式,不是我的方法)較近。現行方法不做側傾或外參標定,也不用固定掃描線的時間訊號:法定週期在深度模型的深度剖面上以空間方式量出,用來定模型的尺度。它沒有深度模型。
 - ⚠ **審查更正**:Diane Neisius (Aptiv Technologies Ltd), "Method of determining the roll angle of a vehicle mounted camera", US 10,776,942 B2, priority 2017-07-26 (EP17183328.8), filed 2018-07-10 (US 16/031,151), granted 2020-09-15. Family: EP3435333B1, CN109308720B. RELATION SHOULD BE: shared_primitive / partial_scale_anchor, NOT same_method. Justification: the claimed invention is camera ROLL ANGLE rho, computed
 
 ### Real-time Prediction of Automotive Collision Risk from Monocular Video
@@ -241,7 +241,7 @@
 - **連結**:https://arxiv.org/abs/2606.31488
 - **關係判定**:`same_depth_anchoring (check: overstated)`　引文屬實:是
 - **它做什麼**:Treats sparse projected LiDAR as geometric prompts that locally calibrate a frozen depth foundation prior through residual per-pixel scale correction, on the argument that the foundation model's relative geometry is already coherent and only a scale mapping is missing. Evaluated on nuScenes.
-- **與我們的差別**:幾乎逐字陳述了現行方法的前提——形狀是對的,只缺尺度——是這個前提最強的已發表支持。我自己的乾淨結果方向一致:AV2 c865c156 上 da3_metric 直接輸出的近場距離誤差 29.00%,乘上虛線尺 k 後 1.64%(不經任何車道線擬合重評,`TERRY_RESEARCH_RECORD.md` §11.4 補註)。(另有舊評分:comma2k19 直接輸出 2.3–40%、乘上以雷達本身擬合的單一常數後 2.1–4.4%,以組員匯出的雷達檔評分,見 `DEPTH_MODEL_BENCHMARK.md` §12,不放進大專生計畫。)但它的公尺錨是光達——主動感測器,本方法的前提就是沒有——而且修正是逐像素,不是單一全域常數;它沒有從影像內容或法定道路幾何推尺度。
+- **與我們的差別**:幾乎逐字陳述了現行方法的前提——形狀是對的,只缺尺度——是這個前提最強的已發表支持。我自己的乾淨結果方向一致:AV2 c865c156 上 da3_metric 直接輸出的近場距離誤差 29.00%,乘上虛線尺 k 後 1.64%(不經任何車道線擬合重評,`TERRY_RESEARCH_RECORD.md` §11.4 補註)。(另有舊評分:comma2k19 直接輸出 2.3–40%、乘上以雷達本身擬合的單一常數後 2.1–4.4%,以專題共用程式匯出的雷達檔評分,見 `DEPTH_MODEL_BENCHMARK.md` §12,不放進大專生計畫。)但它的公尺錨是光達——主動感測器,本方法的前提就是沒有——而且修正是逐像素,不是單一全域常數;它沒有從影像內容或法定道路幾何推尺度。
 - ⚠ **審查更正**:Huang, C., Zhang, W., Yin, H., Wang, Y., Li, H., Wang, B., Sun, X., Wang, L. (Baidu Inc.). "DrivingDepth: Sparse-Prompted Pixel-wise Scale Correction for Driving Depth Estimation." arXiv:2606.31488 [cs.CV], submitted 30 Jun 2026. https://arxiv.org/abs/2606.31488 (code: https://github.com/HCaelrs/DrivingDepth) 關係應改為 same_premise_for_part3_only(不是 same_depth_anchoring)。正確敘述:此文以文獻形式支持舊紀錄所稱第 (3) 部分(以外部常數定深度模型的尺度)的「前提」——度…(原紀錄在此截斷)
 
 ### FARSEC: A Reproducible Framework for Automatic Real-Time Vehicle Speed Estimation Using Traffic Cameras
@@ -274,7 +274,7 @@
 - **連結**:https://arxiv.org/abs/2601.01457
 - **關係判定**:`same_depth_anchoring (check: overstated)`　引文屬實:是
 - **它做什麼**:Under a frozen-backbone setting, recovers metric depth by an image-specific affine transform in inverse depth, training only lightweight calibration heads; a CLIP text encoder predicts an uncertainty-aware envelope of feasible calibration parameters and pooled visual features select within it.
-- **與我們的差別**:同樣是凍結骨幹加校正,但校正參數是學習出的頭由影像與文字特徵**預測**,不是由已知的實體長度量出——對鑑識用途方向相反:沒有東西可以交互詰問,作者也承認文字線索有雜訊。它對每張影像擬一個仿射轉換;深度模型 × 虛線尺的 k 是每支片由法定週期量出的一個常數(comma2k19 同一台車不同日期的兩段量到 0.972 / 0.959,`TERRY_RESEARCH_RECORD.md` §11.4)。(舊方法 C 的常數跨段漂 0.1–1.2%,尺度來自組員的時間差法,不放進大專生計畫。)
+- **與我們的差別**:同樣是凍結骨幹加校正,但校正參數是學習出的頭由影像與文字特徵**預測**,不是由已知的實體長度量出——對鑑識用途方向相反:沒有東西可以交互詰問,作者也承認文字線索有雜訊。它對每張影像擬一個仿射轉換;深度模型 × 虛線尺的 k 是每支片由法定週期量出的一個常數(comma2k19 同一台車不同日期的兩段量到 0.972 / 0.959,`TERRY_RESEARCH_RECORD.md` §11.4)。(舊方法 C 的常數跨段漂 0.1–1.2%,尺度來自專題共用程式的時間差法,不放進大專生計畫。)
 - ⚠ **審查更正**:Zhan, Mingxia; Zhang, Li; Wang, Beibei; Wang, Yingjie; Shi, Zenglin. "Language as Prior, Vision as Calibration: Metric Scale Recovery for Monocular Depth Estimation." arXiv preprint arXiv:2601.01457, submitted 4 January 2026 (v1), last revised 9 January 2026 (v3). No peer-reviewed venue. https://arxiv.org/abs/2601.01457 Corrected relation: related_work_same_problem_different_anchor (NOT same_depth
 
 ### Physics-Grounded Monocular Vehicle Distance Estimation Using Standardized License Plate Typography
@@ -296,7 +296,7 @@
 - **連結**:https://arxiv.org/html/2410.00736
 - **關係判定**:`same_depth_anchoring`　引文屬實:是
 - **它做什麼**:Fuses sparse mmWave radar returns with a monocular metric depth network, learning a per-pixel blending weight between the network's own metres and radar-averaged depth. Reports AbsRel for three settings on three validation sets: metric baseline 0.194 / 1.632 / 2.669, naive (global) radar scaling 2.705 / 0.952 / 0.247, their fusion 0.170 / 0.313 / 0.223.
-- **與我們的差別**:結構相同——外部公尺量測修正單目深度模型的絕對尺度——但外部量測是車載雷達(鑑識案件預設沒有),修正是學習出的逐像素場,不是由道路幾何取得的單一常數。它顯示單一全域重新縮放在某些場景可能比原始度量輸出差很多,這是對「單一常數」做法最強的已發表警告,現行方法必須回答。目前的回答:品質閘(k 中位數的 95% 區塊 bootstrap 信賴區間半寬 ≤ 3%、左右兩線一致 10%)拒發量不準的片;隨距離變的尺 k(z) 在 2026-09-30 試過,在虛線尺量得到的範圍內比例幾乎固定、沒有改善,尺的範圍外只給距離並標示可能偏近(`TERRY_DEV_LOG.md` 2026-09-30 12:05–12:20)。(舊方法 C 的常數跨段漂 0.1–1.2%,尺度來自組員的時間差法,不放進大專生計畫。)
+- **與我們的差別**:結構相同——外部公尺量測修正單目深度模型的絕對尺度——但外部量測是車載雷達(鑑識案件預設沒有),修正是學習出的逐像素場,不是由道路幾何取得的單一常數。它顯示單一全域重新縮放在某些場景可能比原始度量輸出差很多,這是對「單一常數」做法最強的已發表警告,現行方法必須回答。目前的回答:品質閘(k 中位數的 95% 區塊 bootstrap 信賴區間半寬 ≤ 3%、左右兩線一致 10%)拒發量不準的片;隨距離變的尺 k(z) 在 2026-09-30 試過,在虛線尺量得到的範圍內比例幾乎固定、沒有改善,尺的範圍外只給距離並標示可能偏近(`TERRY_DEV_LOG.md` 2026-09-30 12:05–12:20)。(舊方法 C 的常數跨段漂 0.1–1.2%,尺度來自專題共用程式的時間差法,不放進大專生計畫。)
 - ⚠ **審查更正**:Marco Job, Thomas Stastny, Tim Kazik, Roland Siegwart, Michael Pantic, "Radar Meets Vision: Robustifying Monocular Metric Depth Prediction for Mobile Robotics," arXiv:2410.00736v1 [cs.RO], submitted 1 Oct 2024; DOI 10.48550/arXiv.2410.00736; arXiv comments field: "Submitted to ICRA 2025"; all authors: Autonomous Systems Lab, ETH Zürich. 只有 v1,dblp 僅以 CoRR 收錄(找不到 ICRA/IEEE 正式論文集版本),所以「arXiv preprin
 
 ### Typography-Based Monocular Distance Estimation Framework for Vehicle Safety Systems
@@ -497,7 +497,7 @@
 - **連結**:https://ar5iv.labs.arxiv.org/html/1902.01293
 - **關係判定**:`same_application (check: understated)`　引文屬實:是
 - **它做什麼**:A monocular collision-risk pipeline whose absolute-speed component uses lane markings of known dimensions as stationary references instead of optical flow: it detects the reference lanes, watches a vertically fixed point on the lane, times how long a marking takes to appear, disappear and appear again, and converts that with the known marking spacing into ego speed.
-- **與我們的差別**:與組員 chennnlee 的標線碼表(`dashcam_range_speed.py`,固定影像列上標線訊號的時間週期)物理原理相同;我的自車速不用固定影像列計時,而是在深度模型經 k 校正的公尺剖面上量虛線邊緣在相隔幾幀之間的平移。本篇以邊緣/外觀事件計時、只用一個固定點,不取任何尺度常數;自車速只用於風險預測,不拿來校正測距,也沒有重新縮放深度網路。
+- **與我們的差別**:我的自車速不用固定影像列計時,而是在深度模型經 k 校正的公尺剖面上量虛線邊緣在相隔幾幀之間的平移。本篇以邊緣/外觀事件計時、只用一個固定點,不取任何尺度常數;自車速只用於風險預測,不拿來校正測距,也沒有重新縮放深度網路。
 - ⚠ **審查更正**:Derek J. Phillips, Regina Madigan, Juan Carlos Aragon, Sunil Chintakindi, Anjali Roychowdhury, Mykel J. Kochenderfer, "Real-time Prediction of Automotive Collision Risk from Monocular Video", arXiv:1902.01293, submitted 4 Feb 2019. arXiv comments field: "Submitted to IV2019. 7 pages, 4 figures, 3 tables"; arXiv 上沒有 journal-ref,也查不到它收錄於 IV 2019 論文集的證據,…(原紀錄在此截斷)
 
 ### Robust video-based vehicle speed estimation for occluded scenes for forensic analysis of traffic accidents
@@ -519,7 +519,7 @@
 - **連結**:https://saemobilus.sae.org/papers/speed-analysis-video-a-method-determining-a-range-calculations-2021-01-0887
 - **關係判定**:`same_application`　引文屬實:是
 - **它做什麼**:Gives a procedure for reporting vehicle speed from video as a RANGE rather than a point value, propagating two uncertainty sources: uncertainty in locating the vehicle's position (from photogrammetry best-fit) and uncertainty in the time interval between positions. Validated against recordings of an instrumented vehicle at known speeds.
-- **與我們的差別**:鑑識領域報告車速的範本(以範圍呈現並列出各成分)。組員 chennnlee 的管線 A 以擬合標準誤 ⊕ 尺度 CV 報 ±95% 信賴區間,與此類似,但沒有拿真值檢驗覆蓋率。我的封存版(2026-09-29)只報 k 的 95% 區塊 bootstrap 信賴區間(當品質閘用);第二版(`docs/DEPTH_DASH_V2_PREREG.md`,草稿)為每個速度附上 95% 範圍,放大倍數在一段開發片上定、另一段驗證覆蓋率。本篇在尺度錨上沒有創新:位置來自對現場的一般相機匹配攝影測量;沒有標線、沒有深度模型。
+- **與我們的差別**:鑑識領域報告車速的範本(以範圍呈現並列出各成分)。我的封存版(2026-09-29)只報 k 的 95% 區塊 bootstrap 信賴區間(當品質閘用);第二版(`docs/DEPTH_DASH_V2_PREREG.md`,草稿)為每個速度附上 95% 範圍,放大倍數在一段開發片上定、另一段驗證覆蓋率。本篇在尺度錨上沒有創新:位置來自對現場的一般相機匹配攝影測量;沒有標線、沒有深度模型。
 - ⚠ **審查更正**:No correction needed. Exact citation as the publisher page gives it: Beauchamp, G., Pentecost, D., Koch, D., Hashemian, A., Marr, J., and Cordero, R., "Speed Analysis from Video: A Method for Determining a Range in the Calculations," SAE Technical Paper 2021-01-0887, SAE WCX Digital Summit, published 2021-04-06, doi:10.4271/2021-01-0887 (all authors Kineticorp LLC). Relation stands as same_applica
 
 ### Speed Determination Using Audio Analysis of Dash Camera Video from Passenger Vehicle Tires Frequencies for Vehicle Accident Reconstruction
@@ -541,7 +541,7 @@
 - **連結**:https://saemobilus.sae.org/papers/accuracy-vehicle-speeds-decelerations-brake-onset-times-calculated-onboard-dash-cameras-2025-01-8691
 - **關係判定**:`same_application`　引文屬實:是
 - **它做什麼**:Quantifies dashcam-derived kinematics across five cameras using match-moving, with scale and location supplied by a 3D laser scan of the test site. Speed estimates ranged from underestimating by 0.45 ± 0.05 km/h to overestimating by 0.80 ± 0.16 km/h; deceleration from −0.012 ± 0.013 g to +0.049 ± 0.012 g; brake onset detection lagged actual brake application by 14 ± 41 ms to 94 ± 29 ms.
-- **與我們的差別**:鑑識實務中由行車紀錄器求自車運動學的現行最佳做法,次 1 km/h 的數字是自車速方法該對照的誠實基準(組員 chennnlee 的標線碼表、我由虛線尺求的自車速都要拿來比)。我的自車速目前在海盛 002 / 006 對人工畫格法 MAE 1.36 / 3.62 km/h(2026-09-29 封存),2026-09-30 改用虛線邊緣平移的開發版 1.38 / 1.70(答案已開過,`TERRY_DEV_LOG.md`),仍比這個基準寬。決定性的差別是它的公尺尺度完全來自現場的 3D 雷射掃描——現場必須到得了、掃得了;它是對一般場景特徵做相機追蹤/匹配移動,不是週期標線量測,只報自車運動,沒有目標距離、沒有深度模型。
+- **與我們的差別**:鑑識實務中由行車紀錄器求自車運動學的現行最佳做法,次 1 km/h 的數字是自車速方法該對照的誠實基準(我由虛線尺求的自車速要拿來比)。我的自車速目前在海盛 002 / 006 對人工畫格法 MAE 1.36 / 3.62 km/h(2026-09-29 封存),2026-09-30 改用虛線邊緣平移的開發版 1.38 / 1.70(答案已開過,`TERRY_DEV_LOG.md`),仍比這個基準寬。決定性的差別是它的公尺尺度完全來自現場的 3D 雷射掃描——現場必須到得了、掃得了;它是對一般場景特徵做相機追蹤/匹配移動,不是週期標線量測,只報自車運動,沒有目標距離、沒有深度模型。
 - ⚠ **審查更正**:Flynn, T., Ahrens, M., Young, C., and Siegmund, G.P., "The Accuracy of Vehicle Speeds, Decelerations, and Brake Onset Times Calculated from Onboard Dash Cameras," SAE Technical Paper 2025-01-8691, WCX SAE World Congress Experience, Detroit, MI, April 8, 2025 (publication date listed as 2025-04-01), doi:10.4271/2025-01-8691. Relation: same_application only — a forensic-practice accuracy benchmark f
 
 ### The Effect of Tracker and Control Point Distributions on Vehicle Position and Speed Estimates from Dash Camera Video

@@ -14,7 +14,7 @@
 程式:`tools/depth_dash_scale.py`(方法)、`tools/run_depth_dash_scale.py`(批次規則)。
 參數全部在 `depth_dash_scale.PARAMS`,以本文件同一個 commit 為準。
 
-## 2. 沒有用到組員程式
+## 2. 沒有用到專題共用的程式
 
 方法程式只 import `cv2`、`numpy` 與 `depth_backends`(深度模型介面,作者 Terry)。
 **不 import** `dashcam_range_speed`、`odometer_distance_calib`、`lane_line_fit`、
@@ -71,7 +71,7 @@
 4. **品質閘改過一次**(開發階段):由「單幀週期的 IQR/中位 ≤ 10%」改為
    「中位週期的 95% 區塊 bootstrap 信賴區間半寬 ≤ 3%」,原因是 comma2k19 seg10 以 10.4–10.7% 未過舊閘。
    改動時沒有開過任何答案檔;兩個閘都寫在程式註解裡。
-5. comma2k19 的影格與雷達 CSV 是先前用組員的匯出工具從公開資料集取出的(資料準備,不是方法)。
+5. comma2k19 的影格與雷達 CSV 是先前用專題共用的匯出工具從公開資料集取出的(資料準備,不是方法)。
 
 ## 7. 追加盲測:AV2 四支從未開過真值的通過片(2026-09-29 晚間,下載真值之前寫)
 
@@ -107,13 +107,13 @@ e1d68dde 約偏高 40%(即「可疑」標記是對的)。若 544a8102 或 e1d68d
 以下是登錄之後補的出處與更正說明;上面登錄的內容一字未改。
 
 1. **§5 第 2 點的 comma2k19 評分,兩個前提都已被取代**:
-   - 配對集 `paired_*.csv` 是由組員(chennnlee)的 `comma2k19_radar_export.py` 匯出的雷達檔篩出來的
+   - 配對集 `paired_*.csv` 是由專題共用的 `comma2k19_radar_export.py` 匯出的雷達檔篩出來的
      (§6 第 5 點說的「雷達 CSV」就是它);2026-09-29 那次評分另外對 CAN 算逐對自車速時,CAN 也是從同一批
      `paired_*.csv` 讀的。之後改用自己的讀取程式 `tools/c2k19_extract.py`。
    - 雷達偏移設為 Δ = 0。2026-09-30 已更正:comma2k19 的雷達距離從車頭量起,偏移依讀點而定
      (輪胎著地點約 +2.3 m、車尾表面約 +1.5 m),見 `docs/DEPTH_MODEL_BENCHMARK.md` §21 開頭。
-2. **§7 第 1 點的「方法 C 沒通過」指的是舊方法 C**(組員的 `lane_line_fit.py` 抽線 + 時間差 A,經由已刪除的
+2. **§7 第 1 點的「方法 C 沒通過」指的是舊方法 C**(專題共用的 `lane_line_fit.py` 抽線 + 時間差 A,兩者都不是我寫的;經由已刪除的
    `av2_marking_calib.py`),不是現行的空間版方法 C(`tools/marking_geometry.py`)。
-3. **近場/遠場以 32 m 分界**(§5 第 2、3 點)最早來自組員的遠場旗標(靈敏度 0.8 m/px ≈ 32 m),不是本方法自己的依據;
-   §7 第 1 點讀值像素用的「遮罩最低 12%」帶也出自組員的管線(見 `docs/DEPTH_MODEL_BENCHMARK.md` §18.2)。
+3. **近場/遠場以 32 m 分界**(§5 第 2、3 點)最早來自專題共用管線的遠場旗標(靈敏度 0.8 m/px ≈ 32 m),不是本方法自己的依據;
+   §7 第 1 點讀值像素用的「遮罩最低 12%」帶也出自專題共用的管線(見 `docs/DEPTH_MODEL_BENCHMARK.md` §18.2)。
 4. 用自己的真值重評的結果記在 `docs/TERRY_RESEARCH_RECORD.md` §11.12。
