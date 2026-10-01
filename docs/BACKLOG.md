@@ -50,7 +50,7 @@
   右圖是 `tools/report/plot_distance_calib.py` 讀 `data/output/dashcam_demo/*_trackv3/ranges.csv`(沒有就讀基底資料夾)的距離中位數再乘係數,不是端到端實測。
   下一步二選一:(1) 右圖改讀 `data/output/dashcam_demo/*_current/ranges.csv` 的端到端中位數(已套係數,不要再乘);(2) 只換成現行 json 重畫,並在圖或 README 保留「右圖是預測」的標註。
   出處:`data/output/dashcam_demo/_calib/README.md`「2026-09-18 狀態更新」;該腳本右圖段。
-- **A4 環境依賴沒寫齊**:`requirements.txt` 缺 pillow;ffmpeg 系統依賴與影格重建通則(`ffmpeg -i 原片 -vsync 0 -qscale:v 2 <dir>/f%05d.jpg`)不在 `REPRODUCE.md`;
+- **A4 環境依賴沒寫齊**:~~`requirements.txt` 缺 pillow~~(2026-10-01 已補);ffmpeg 系統依賴與影格重建通則(`ffmpeg -i 原片 -vsync 0 -qscale:v 2 <dir>/f%05d.jpg`)不在 `REPRODUCE.md`;
   `tools/dashcam_range_speed.py`、`tools/cctv_speed_estimation.py`、`tools/dashcam_distance_ruler.py` 寫死 `libopenh264` 編碼器。
   影格命名也不一致:`data/output/model_comparison/README.md`、`data/output/cctv_validation/qz1130221/README.md`、`data/output/dashcam_demo/hs005/README.md`、`data/output/dashcam_demo/wow001/README.md` 用 `f%04d`,其餘用 `f%05d`;
   管線以 `sorted(glob)` 排序,超過 9999 幀時 `%04d` 會排錯序,但目前沒有已知的片超過(wow001 只抽前 119 s,3570 幀)。

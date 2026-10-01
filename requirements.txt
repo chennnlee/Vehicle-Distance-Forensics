@@ -12,6 +12,7 @@ openpyxl
 # 產生報告與簡報(tools/report/;只跑量測的話不需要)
 python-docx
 python-pptx
+pillow               # 示範影片的中文字(tools/report/render_demo_video.py)
 
 # 下載公開資料集
 requests
