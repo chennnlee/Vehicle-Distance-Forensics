@@ -16,9 +16,9 @@ cd "$(dirname "$0")/.."
 P=${VDF_PY:-~/venvs/depthbench/bin/python}
 OUT=data/output/depth_benchmark
 
-# Frames live in /tmp while a session is running, but /tmp does not survive a WSL
-# restart. A copy is kept under data/input/_frames_cache/ (gitignored); prefer
-# whichever is present so going home does not cost a re-decode.
+# Frames were first extracted under /tmp, which does not survive a WSL restart.
+# A copy is kept under data/input/_frames_cache/ (gitignored); prefer whichever
+# is present so a restart does not cost a re-decode.
 if [ -d /tmp/c2k19 ]; then FR=/tmp/c2k19
 elif [ -d data/input/_frames_cache/c2k19 ]; then FR=data/input/_frames_cache/c2k19
 else echo "找不到影格:先重抽(見 docs/DEPTH_MODEL_BENCHMARK.md)"; exit 1; fi

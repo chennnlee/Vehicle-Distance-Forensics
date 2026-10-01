@@ -9,7 +9,7 @@ lane on each side, which is the "car we are following, or the one in the next la
 report talks about.  Lane width is read off the two fitted lines at that row, so it needs
 no metric scale.
 
-Both contact-point definitions go in the same row, because CLAUDE.md records that they are
+Both contact-point definitions go in the same row, because the project notes record that they are
 not interchangeable and that confusing them cost a 10-15% range error on comma2k19:
 
   py_max    lowest point of the mask -- where the tyre meets the road.  This is pipeline
@@ -25,6 +25,10 @@ as are masks below `--min-area-px`.
 Usage:
   python3 tools/av2_targets.py --log data/input/av2/<log> --calib data/output/av2_marking/calib.json \
       --out data/output/av2_depth/targets_<log>.csv
+
+For a log the marking calibration refused, the ego-lane lines can come instead from a sealed
+depth_dash_scale result (`--lanes-json`): the lines of the detection window nearest each
+frame, with that window's line crossing as y_h. Same selection rule otherwise.
 """
 from __future__ import annotations
 
@@ -42,7 +46,12 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--log", required=True)
-    ap.add_argument("--calib", required=True, help="calib.json from av2_marking_calib.py")
+    ap.add_argument("--calib", default="", help="calib.json from av2_marking_calib.py")
+    ap.add_argument("--lanes-json", default="", help="depth_dash_scale result whose windows give the lanes")
+    ap.add_argument("--no-lanes", action="store_true",
+                    help="2026-09-30: keep every vehicle detection (no lane test, no lane fitting of any kind); "
+                         "the scoring then picks the lanes from the lidar cuboid's lateral offset")
+    ap.add_argument("--device", default=None, help="YOLO device, e.g. cpu (default: ultralytics' choice)")
     ap.add_argument("--frames-name", default="pinhole")
     ap.add_argument("--yolo", default="checkpoints/yolov8m-seg.pt")
     ap.add_argument("--conf", type=float, default=0.4)
@@ -58,17 +67,38 @@ def main():
     from ultralytics import YOLO
 
     log = Path(args.log)
-    cal = {c["log"]: c for c in json.loads(Path(args.calib).read_text())}[log.name]
-    if cal.get("status") != "ok":
-        raise SystemExit(f"{log.name}: marking calibration did not pass ({cal.get('status')})")
-    (la, lb), (ra, rb) = (tuple(cal["lines"][0]["line"]), tuple(cal["lines"][1]["line"]))
-    y_h = cal["y_h"]
+    cal = None
+    if args.no_lanes:
+        def lanes_at(pos):
+            return "all"
+    elif args.lanes_json:
+        dash = json.loads(Path(args.lanes_json).read_text())
 
-    frames = sorted((log / args.frames_name).glob("*.jpg"))[::args.stride]
+        def lanes_at(pos):
+            wd = min(dash["windows"], key=lambda w: abs(w["center"] - pos / dash["step"]))
+            if not (wd.get("left") and wd.get("right") and wd.get("vp_row")):
+                return None
+            return (wd["left"]["a"], wd["left"]["b"]), (wd["right"]["a"], wd["right"]["b"]), wd["vp_row"]
+    else:
+        cal = {c["log"]: c for c in json.loads(Path(args.calib).read_text())}[log.name]
+        if cal.get("status") != "ok":
+            raise SystemExit(f"{log.name}: marking calibration did not pass ({cal.get('status')})")
+        fixed = (tuple(cal["lines"][0]["line"]), tuple(cal["lines"][1]["line"]), cal["y_h"])
+
+        def lanes_at(pos):
+            return fixed
+
+    all_frames = sorted((log / args.frames_name).glob("*.jpg"))
+    frames = all_frames[::args.stride]
     model = YOLO(args.yolo)
     rows = []
-    for fp in frames:
-        res = model.predict(str(fp), verbose=False, conf=args.conf)[0]
+    for pos, fp in zip(range(0, len(all_frames), args.stride), frames):
+        lanes = lanes_at(pos)
+        if lanes is None:
+            continue
+        if lanes != "all":
+            (la, lb), (ra, rb), y_h = lanes
+        res = model.predict(str(fp), verbose=False, conf=args.conf, device=args.device)[0]
         if res.masks is None:
             continue
         H, W = res.orig_shape
@@ -89,12 +119,13 @@ def main():
             sel = ys >= np.percentile(ys, 100.0 - args.contact_pct)
             px, py_band = float(np.median(xs[sel])), float(np.median(ys[sel]))
             py_max = float(poly[:, 1].max())
-            if py_max <= y_h + 1:
-                continue
-            left, right = la * py_max + lb, ra * py_max + rb
-            lane_w = right - left
-            if not (left - args.lane_widths * lane_w <= px <= right + args.lane_widths * lane_w):
-                continue
+            if lanes != "all":
+                if py_max <= y_h + 1:
+                    continue
+                left, right = la * py_max + lb, ra * py_max + rb
+                lane_w = right - left
+                if not (left - args.lane_widths * lane_w <= px <= right + args.lane_widths * lane_w):
+                    continue
             rows.append(dict(frame_idx=fp.stem, px=round(px, 1), py=round(py_band, 2),
                              py_max=round(py_max, 2), cls=int(cls), conf=round(float(cf), 3),
                              x0=round(float(x0), 1), y0=round(float(y0), 1),
@@ -102,14 +133,17 @@ def main():
                              mask_px=int(xs.size)))
 
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+    if not rows:
+        raise SystemExit(f"{log.name}: no target passed the selection; nothing written")
     with open(args.out, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=list(rows[0]))
         w.writeheader()
         w.writerows(rows)
-    d = np.array([cal["A_marking"] / (r["py_max"] - y_h) for r in rows])
     print(f"{log.name}: {len(rows)} targets over {len(frames)} frames")
-    print(f"  marking range at the contact point: median {np.median(d):.1f} m, "
-          f"10-90% {np.percentile(d, 10):.1f}-{np.percentile(d, 90):.1f} m")
+    if cal is not None:
+        d = np.array([cal["A_marking"] / (r["py_max"] - cal["y_h"]) for r in rows])
+        print(f"  marking range at the contact point: median {np.median(d):.1f} m, "
+              f"10-90% {np.percentile(d, 10):.1f}-{np.percentile(d, 90):.1f} m")
     print(f"wrote {args.out}")
 
 

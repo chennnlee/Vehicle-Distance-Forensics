@@ -1,9 +1,16 @@
-# 自車速 vs 海盛人工畫格法真值(20251230 批,2026-09-16)
+# 自車速(專題共用的碼表)vs 海盛人工畫格法真值(20251230 批,2026-09-16)
+
+> **歸屬說明(2026-09-30)**:本評估的**車速量測是專題共用的碼表程式,不是我寫的**——`tools/public_dataset_ego_eval.py`
+> 呼叫 `tools/auto_odometer_points.py` 自動挑取樣點,再用 `tools/dashcam_range_speed.py` 的固定列虛線時間週期求車速。
+> 我寫的是人工真值解析器(`tools/haisheng_manual_truth.py`)與評分(同一組畫格窗內平均、逐段比較)。
+> **50 段 MAE 1.02 屬於專題共用的碼表,不屬於我的大專生計畫。**
+> 我自己的方法(深度模型 × 虛線尺)在同一批素材上的結果見 `docs/TERRY_RESEARCH_RECORD.md` §11.4
+> (002 / 006 MAE 1.36 / 3.62 km/h,2026-09-29 封存)與 `docs/TERRY_DEV_LOG.md`。
 
 ## 這在回答什麼
 
-「我的方法跟他標示的差多少」。對照對象是**人工畫格法**,不是 OSD GPS
-——CLAUDE.md 已仲裁過「OSD GPS 不是金標準」,有人工真值時一律以人工為準。
+「專題共用的碼表跟海盛人工標示的差多少」。對照對象是**人工畫格法**,不是 OSD GPS
+——專題共用的紀錄已記載「OSD GPS 不是金標準」(`docs/METHODOLOGY_PITFALLS.md` 第 5 條),有人工真值時一律以人工為準。
 
 ## 真值怎麼來的
 
@@ -21,15 +28,15 @@
 
 ⚠ **時基落差**:002 與 005 的 xlsx fps 與影片容器差 **0.43% / 0.37%**
 (002: 29.8421 vs 29.9700;005: 29.7778 vs 29.8883)。0.4% 在 95 km/h 上是 0.38 km/h,
-在 MAE 1 的量級上不可忽略。本評估用**容器 fps**(與 CLAUDE.md 既有參數一致),
+在 MAE 1 的量級上不可忽略。本評估用**容器 fps**(與專題共用案表 `docs/CASE_PARAMETERS.md` 的做法一致:hs005 記為 29.8883,即容器 fps),
 所以這兩案的真值本身帶 0.4% 的不確定度。003/004/006 兩者完全一致。
 
 ## 比較方式
 
-真值是**每段 30 m 的平均速度**,所以我方也取**同一組畫格窗內的平均**,
+真值是**每段 30 m 的平均速度**,所以碼表讀值也取**同一組畫格窗內的平均**,
 而不是在段中點取樣單一幀。這是唯一對等的比法。
 
-## 結果(50/54 段)
+## 結果(50/54 段;量測是專題共用的碼表,不是我的方法)
 
 | 案 | 機種 / 場景 | 速度帶 | 段數 | 比到 | **MAE** | bias | p90 | ±3內 | 覆蓋 |
 |---|---|---|---|---|---|---|---|---|---|
@@ -40,26 +47,26 @@
 | 006 | GDR E350 / 白天高速 | 92.5–98.1 | 13 | 13 | **1.34** | +0.22 | 2.19 | 92% | 100% |
 | **合計** | | | **54** | **50** | **1.02** | +0.29 | 2.06 | **98%** | |
 
-逐段對照:`segment_compare.csv`(case, seg, manual_kmh, ours_kmh, diff_kmh)。
+逐段對照:`segment_compare.csv`(case, seg, manual_kmh, ours_kmh, diff_kmh;`ours_kmh` 是專題共用碼表的讀值,不是我的方法,欄名沿用舊檔)。
 
 ## 基準線重現
 
-005 用 CLAUDE.md 記載的參數(fps 29.8883、點位 `779,700;710,750;643,800;572,850`、cycle 10)
-逐幀評估得 **MAE 0.72**,對照記載值 **0.69**。差 0.03,來源是影格重新編碼
-(CLAUDE.md 已預警「OSD 秒跳在重編碼幀上偵測略異」)。**基準線視為重現。**
+005 用專題共用案表(`docs/CASE_PARAMETERS.md`)記載的參數(fps 29.8883、點位 `779,700;710,750;643,800;572,850`、cycle 10)
+逐幀評估得 **MAE 0.72**,對照 `docs/VALIDATION_STATUS.md` 的記載值 **0.69**。差 0.03,來源是影格重新編碼
+(`data/output/report_final/README.md` 記載過重編碼影格會讓偵測結果略有差異;該處講的是 CCTV 的 OSD 秒跳)。**基準線視為重現。**
 
-## 兩個新案(從未測過)
+## 兩個新案(碼表從未測過)
 
-`002`(白天高速 55–69 km/h)與 `004`(**夜間街道 32–48 km/h**)不在 CLAUDE.md 的 15 案迴歸表裡。
+`002`(白天高速 55–69 km/h)與 `004`(**夜間街道 32–48 km/h**)不在專題共用的 15 案碼表迴歸案表(`tools/odometer_regression_cases.py`)裡。
 兩案都通過:MAE 0.87 / 0.79,**全部 15 段都在 ±3 內**。
 
-**004 值得註記**:夜間 + 市區街道 + 低速,是 CLAUDE.md 標為較弱的情境
+**004 值得註記**:夜間 + 市區街道 + 低速,是專題共用紀錄(`docs/FAILURE_BOUNDARIES.md`)標為較弱的情境
 (comma2k19 夜間 MAE 4.72)。這裡沒有退化。合理推測是台灣市區照明充足、
 虛線在夜間仍清楚,與加州無照明高速公路的逆反射路釘問題不同 —— 但**這是推測,只有一案,不能當結論**。
 
 ## 🔴 一個未解決的矛盾:003
 
-CLAUDE.md 與 `tools/odometer_regression_cases.py` 都記載這支片**已知失效**:
+專題共用的紀錄(`docs/VALIDATION_STATUS.md` ⑤、`docs/ODOMETER_DESIGN.md`)與 `tools/odometer_regression_cases.py` 都記載這支片**已知失效**:
 
 > hs003s(Mio 超廣角)覆蓋僅 31%、MAE 25.3 = 取樣點落在**連續縱向亮痕**上而非虛線
 
@@ -81,15 +88,17 @@ CLAUDE.md 與 `tools/odometer_regression_cases.py` 都記載這支片**已知失
 1. 003 覆蓋僅 65%,14 段中有 4 段沒有足夠讀值可比(誠實 no-lock,不是算錯)。
 2. 只有 5 案 50 段,且四案是 Garmin、一案 Mio,機種涵蓋窄。
 3. `cycle = 10 m` 是台灣車道虛線規格,本批素材皆為同一路類,沒有踩到
-   CLAUDE.md 記的「跨路類倍速」問題。
-4. 這裡量的是**自車速**。他車距離/速度需要完整管線(含 SHARP),未在本次評估內。
+   `docs/FAILURE_BOUNDARIES.md` 記的「跨路類倍速」問題。
+4. 這裡量的是**自車速**。他車距離/速度需要專題共用的完整管線(含 SHARP),未在本次評估內。
 
 ## 重現指令
 
 ```bash
 P=~/venvs/depthbench/bin/python
+# 真值解析(我的程式)
 $P tools/haisheng_manual_truth.py --scan "data/input/海盛_20251230" --out-dir /tmp/hs_gt
 ffmpeg -i <clip>.mp4 -vsync 0 -qscale:v 2 /tmp/hs_frames/<key>/f%05d.jpg
+# 車速量測:專題共用的碼表評估程式(不是我寫的;public_dataset_ego_eval.py → auto_odometer_points.py、dashcam_range_speed.py)
 $P tools/public_dataset_ego_eval.py --frames-dir /tmp/hs_frames/<key> --fps <容器fps> \
    --auto-points --dash-cycle-m 10 --gt-csv /tmp/hs_gt/<key>_*_gt.csv
 ```

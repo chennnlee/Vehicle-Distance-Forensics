@@ -2,7 +2,7 @@
 """Turn an Argoverse 2 log's front camera into the frame folder the pipeline's tools expect.
 
 Why this dataset.  The marking method needs a longitudinal anchor, which means enough
-frames per dash cycle: fps >= 8 * v / cycle (CLAUDE.md's sampling floor, found on KITTI).
+frames per dash cycle: fps >= 8 * v / cycle (the project's sampling floor, found on KITTI).
 AV2's ring cameras run at 20 Hz, so a 12.19 m cycle at 50 km/h still gives 17 frames per
 cycle, where KITTI's 10 Hz would give 8.  It also carries what the Taiwanese clips cannot:
 human-annotated lidar cuboids for the other vehicles, and a factory calibration.
@@ -24,12 +24,13 @@ Two numbers here are never used by the measurement, only to score it afterwards:
 AV2 imagery is already rectified -- the devkit projects with a bare pinhole matrix and
 never touches the published k1, k2, k3 -- so this only rescales and renames.  The scale
 factor divides fx, fy, cx, cy with it.  Verify the rectification independently before
-trusting it: `lane_line_fit.py` fits straight lines to the lane markings, and its residual
-is a few px on a rectified image and tens of px on a distorted one.
+trusting it: straight lane markings stay straight on a rectified image (a straight-line fit
+leaves a few px of residual there and tens of px on a distorted one).
 
 Ego speed comes from city_SE3_egovehicle (GPS/IMU).  The measurement does not use it; it
-is here to cross-check the assumed dash cycle, exactly as CLAUDE.md requires of the
-Taiwanese clips ("週期勿信規範先驗 ... 有 GPS OSD 就先反驗").
+only cross-checks the dash cycle afterwards.  The cycle itself is the local legal value:
+US MUTCD 10 ft + 30 ft = 12.19 m in most AV2 cities, Caltrans 12 ft + 36 ft = 14.63 m in
+California (Caltrans Standard Plan A20A).
 
 Usage:
   python3 tools/av2_prepare.py --log data/input/av2/<log id> --scale 0.5

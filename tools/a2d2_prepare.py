@@ -32,7 +32,7 @@ trusting it: lane_line_fit.py's residual is a few px on a rectified image and te
 distorted one.
 
 Ego speed comes from the drive's bus_signals json (vehicle CAN).  The measurement does not
-use it; it is there to cross-check the assumed dash cycle, as CLAUDE.md requires.
+use it; it is there to cross-check the assumed dash cycle, as the project notes require.
 
 Usage:
   python3 tools/a2d2_prepare.py --drive data/input/a2d2/camera_lidar/20190401_121727

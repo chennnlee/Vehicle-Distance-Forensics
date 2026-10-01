@@ -10,7 +10,7 @@ the sensor rig's geometry.
 
 It also sits below this project's own sampling floor, deliberately.  The odometer needs
 roughly eight frames per dash cycle; KITTI runs at 10 Hz, so a German 12 m cycle survives
-only up to about 54 km/h.  CLAUDE.md recorded that floor from a KITTI ego-speed run that
+only up to about 54 km/h.  The project notes recorded that floor from a KITTI ego-speed run that
 failed at 85 km/h.  A refusal here is a result, not a waste.
 
 Reference numbers, neither of which the measurement may use:

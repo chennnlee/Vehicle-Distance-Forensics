@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Read a 海盛 `*_manual.xlsx` frame-method report into the gt.csv the evaluators take.
 
-CLAUDE.md notes these sheets are machine-readable and that manual frame-method truth
+The project notes record that these sheets are machine-readable and that manual frame-method truth
 outranks OSD GPS ("OSD GPS 不是金標準"), but the parser was never written down, so
 every use of them so far went through hand-copied numbers.
 

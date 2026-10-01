@@ -92,7 +92,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--log", required=True)
-    ap.add_argument("--calib", required=True)
+    ap.add_argument("--calib", default="",
+                    help="calib.json of the marking calibration, only for the method C columns; omit to score the "
+                         "depth models alone (2026-09-30: that calibration runs lane_line_fit.py, shared project code not written by me)")
     ap.add_argument("--pred", required=True, help="glob of prediction CSVs from depth_model_benchmark run")
     ap.add_argument("--frames-name", default="pinhole")
     ap.add_argument("--min-iou", type=float, default=0.5)
@@ -108,8 +110,13 @@ def main():
 
     log = Path(args.log)
     meta = json.loads((log / f"{args.frames_name}_meta.json").read_text())
-    cal = {c["log"]: c for c in json.loads(Path(args.calib).read_text())}[log.name]
-    A, y_h = cal["A_marking"], cal["y_h"]
+    if args.calib:
+        cal = {c["log"]: c for c in json.loads(Path(args.calib).read_text())}[log.name]
+        A, y_h = cal.get("A_marking"), cal["y_h"]      # no A: the marking calibration refused this log
+    else:
+        A, y_h = None, None
+    if A is None:
+        print(f"{log.name}: no marking calibration -- method C columns left empty")
 
     preds = sorted(glob.glob(args.pred))
     if not preds:
@@ -191,7 +198,7 @@ def main():
             continue
         rows_out.append(dict(frame_idx=f, px=t.px, py=t.py, py_max=t.py_max, iou=round(best, 3),
                              gt_m=bi["gt"], lat_m=bi["lat"], cat=bi["cat"], npts=bi["npts"],
-                             method_c=A / (t.py_max - y_h)))
+                             method_c=A / (t.py_max - y_h) if A else np.nan))
 
     if not rows_out:
         raise SystemExit("nothing matched the cuboids")
@@ -203,28 +210,32 @@ def main():
 
     near = R.gt_m < args.near_m
     res = dict(log=log.name, n=len(R), n_near=int(near.sum()),
-               A_marking=A, A_factory=meta["A_factory"], A_ratio=A / meta["A_factory"],
+               A_marking=A, A_factory=meta["A_factory"], A_ratio=A / meta["A_factory"] if A else None,
                y_h=y_h, cy=meta["cy"], near_m=args.near_m,
                gt_range=[float(R.gt_m.min()), float(R.gt_m.max())],
-               method_c_err_pct=rel_err(R.method_c[near], R.gt_m[near]),
+               method_c_err_pct=rel_err(R.method_c[near], R.gt_m[near]) if A else None,
                method_c_err_pct_blindnear=rel_err(R.method_c[R.method_c < args.near_m],
-                                                  R.gt_m[R.method_c < args.near_m]),
+                                                  R.gt_m[R.method_c < args.near_m]) if A else None,
                models={})
     print(f"\n{log.name}   {len(R)} matched targets ({int(near.sum())} nearer than {args.near_m:g} m), "
           f"gt {R.gt_m.min():.1f}-{R.gt_m.max():.1f} m")
-    print(f"  A marking {A:.0f} vs factory {meta['A_factory']:.0f}  ({A / meta['A_factory'] * 100 - 100:+.1f}%)")
-    print(f"  method C (markings only)            {res['method_c_err_pct']:6.2f}%   "
-          f"(near field by its own distance: {res['method_c_err_pct_blindnear']:.2f}%)")
+    if A:
+        print(f"  A marking {A:.0f} vs factory {meta['A_factory']:.0f}  ({A / meta['A_factory'] * 100 - 100:+.1f}%)")
+        print(f"  method C (markings only)            {res['method_c_err_pct']:6.2f}%   "
+              f"(near field by its own distance: {res['method_c_err_pct_blindnear']:.2f}%)")
     for m, d in by_model.items():
         v = R[m].values.astype(float)
         ok = np.isfinite(v) & near.values
-        k_mark = med(R.method_c.values[ok] / v[ok])
+        k_mark = med(R.method_c.values[ok] / v[ok]) if A else float("nan")
         k_orac = med(R.gt_m.values[ok] / v[ok])
         # The constant with no truth in it at all, fitted on the prediction file itself.
-        mc_all = A / (d.py_max.values.astype(float) - y_h)
         pv = d.pred.values.astype(float)
-        sel = np.isfinite(pv) & (pv > 0) & (mc_all < args.near_m)
-        k_blind = med(mc_all[sel] / pv[sel])
+        if A:
+            mc_all = A / (d.py_max.values.astype(float) - y_h)
+            sel = np.isfinite(pv) & (pv > 0) & (mc_all < args.near_m)
+            k_blind = med(mc_all[sel] / pv[sel])
+        else:
+            sel, k_blind = np.zeros(len(pv), bool), float("nan")
         e = dict(n=int(ok.sum()), n_blind=int(sel.sum()),
                  k_marking=k_mark, k_blind=k_blind, k_oracle=k_orac,
                  raw_pct=rel_err(v[ok], R.gt_m.values[ok]),
