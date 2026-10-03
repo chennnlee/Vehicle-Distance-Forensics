@@ -31,6 +31,7 @@
 | 工具 | 用途 |
 |---|---|
 | `tools/dashcam_range_speed.py` | 行車紀錄器自車速、跟車距離、他車絕對時速 |
+| `tools/selected_vehicle_speed.py` | 在一張畫面上框選一台車、輸入自車速,算出它的距離與時速;量不準時標白框或不回傳 |
 | `tools/dashcam_lane_width_calib.py` | 車道寬尺度校正;反推相機高度當自洽檢查 |
 | `tools/lane_line_fit.py` | 從多幀累積的亮線擬出左右車道線,印出 `--pairs` 與消失點(不靠目視挑點) |
 | `tools/odometer_distance_calib.py` | 用碼表訊號算出每台相機的前後方向距離修正係數 |
@@ -40,6 +41,7 @@
 | `tools/odometer_regression_cases.py` | 台灣 15 案碼表迴歸的案表 |
 | `tools/plot_ego_vs_gps.py` | 自車速對 GPS 的驗證圖 |
 | `tools/report/render_demo_video.py` | 從一次量測的 `tracks.json` 畫出首頁的中文示範影片(只畫圖,不重新量測) |
+| `tools/report/render_selected_demo.py` | 畫出首頁「選一台車量時速」的中文示範圖(量測交給 `selected_vehicle_speed.py`) |
 
 **公開資料集評估(comma2k19)**
 

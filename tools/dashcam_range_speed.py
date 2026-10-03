@@ -157,6 +157,63 @@ def build_geometry(ply_path: Path, scale: float, image_shape: tuple[int, int], h
     return pixel_to_plane, ground
 
 
+def frame_vehicle_detections(result, hood_y: int, pixel_to_plane) -> tuple[list[dict], list[tuple]]:
+    """One YOLO-seg result -> vehicle detections placed on the road plane.
+
+    Returns (detections, boxes_px): `detections` carry the mask-bottom ground
+    contact, its plane position and per-pixel sensitivity, already deduplicated;
+    `boxes_px` lists EVERY vehicle box, hood rejects included, because the
+    standstill detector masks them all out of the road. Shared with
+    tools/selected_vehicle_speed.py so a single hand-picked target is measured
+    by exactly the rules the full run uses."""
+    dets = []
+    boxes_px = []
+    if result.boxes is not None:
+        boxes = result.boxes.xyxy.cpu().numpy()
+        clss = result.boxes.cls.cpu().numpy().astype(int)
+        confs = result.boxes.conf.cpu().numpy()
+        mask_polys = result.masks.xy if getattr(result, "masks", None) is not None else None
+        for di, (box, cls) in enumerate(zip(boxes, clss)):
+            if int(cls) not in VEHICLE_CLASSES:
+                continue
+            x1, y1, x2, y2 = box
+            boxes_px.append((float(x1), float(y1), float(x2), float(y2)))
+            gx, gy = (x1 + x2) / 2.0, y2
+            if mask_polys is not None and di < len(mask_polys):
+                poly = mask_polys[di]
+                if poly is not None and len(poly) >= 3:
+                    ys = poly[:, 1]
+                    band = ys >= ys.max() - max(3.0, 0.12 * (y2 - y1))
+                    if band.sum() >= 2:
+                        gx = float(np.median(poly[band, 0]))
+                        gy = float(ys.max())
+            if gy >= hood_y - 2:  # own hood reflection
+                continue
+            pos = pixel_to_plane(gx, gy)
+            if pos is None:
+                continue
+            up = pixel_to_plane(gx, gy - 1.0)
+            sens = float(np.linalg.norm(up - pos)) if up is not None else float("inf")
+            dets.append({"cls": VEHICLE_CLASSES[int(cls)], "conf": float(confs[di]),
+                         "px": float(gx), "py": float(gy),
+                         "box": [float(x1), float(y1), float(x2), float(y2)],
+                         "bh": float(y2 - y1), "pos": pos, "sens": sens})
+    # One vehicle, one detection (ported from CCTV v3): a car box and a
+    # truck box regularly fire on the same pixels; keep only the highest-
+    # confidence box among heavily overlapping same-group detections.
+    dets.sort(key=lambda d: -d["conf"])
+    deduped: list[dict] = []
+    for det in dets:
+        dup = any(
+            CLASS_GROUP.get(det["cls"]) == CLASS_GROUP.get(k["cls"])
+            and _box_overlap(det["box"], k["box"]) > 0.65
+            for k in deduped
+        )
+        if not dup:
+            deduped.append(det)
+    return deduped, boxes_px
+
+
 def road_change_fraction(prev_gray, gray, boxes, hood_y: int) -> float:
     """Fraction of road-band pixels that changed between consecutive frames.
 
@@ -833,51 +890,7 @@ def main() -> None:
         img = cv2.imread(str(f))
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         result = model.predict(source=img, conf=args.conf, verbose=False)[0]
-        dets = []
-        boxes_px = []
-        if result.boxes is not None:
-            boxes = result.boxes.xyxy.cpu().numpy()
-            clss = result.boxes.cls.cpu().numpy().astype(int)
-            confs = result.boxes.conf.cpu().numpy()
-            mask_polys = result.masks.xy if getattr(result, "masks", None) is not None else None
-            for di, (box, cls) in enumerate(zip(boxes, clss)):
-                if int(cls) not in VEHICLE_CLASSES:
-                    continue
-                x1, y1, x2, y2 = box
-                boxes_px.append((float(x1), float(y1), float(x2), float(y2)))
-                gx, gy = (x1 + x2) / 2.0, y2
-                if mask_polys is not None and di < len(mask_polys):
-                    poly = mask_polys[di]
-                    if poly is not None and len(poly) >= 3:
-                        ys = poly[:, 1]
-                        band = ys >= ys.max() - max(3.0, 0.12 * (y2 - y1))
-                        if band.sum() >= 2:
-                            gx = float(np.median(poly[band, 0]))
-                            gy = float(ys.max())
-                if gy >= args.hood_y - 2:  # own hood reflection
-                    continue
-                pos = pixel_to_plane(gx, gy)
-                if pos is None:
-                    continue
-                up = pixel_to_plane(gx, gy - 1.0)
-                sens = float(np.linalg.norm(up - pos)) if up is not None else float("inf")
-                dets.append({"cls": VEHICLE_CLASSES[int(cls)], "conf": float(confs[di]),
-                             "px": float(gx), "py": float(gy),
-                             "box": [float(x1), float(y1), float(x2), float(y2)],
-                             "bh": float(y2 - y1), "pos": pos, "sens": sens})
-        # One vehicle, one detection (ported from CCTV v3): a car box and a
-        # truck box regularly fire on the same pixels; keep only the highest-
-        # confidence box among heavily overlapping same-group detections.
-        dets.sort(key=lambda d: -d["conf"])
-        deduped: list[dict] = []
-        for det in dets:
-            dup = any(
-                CLASS_GROUP.get(det["cls"]) == CLASS_GROUP.get(k["cls"])
-                and _box_overlap(det["box"], k["box"]) > 0.65
-                for k in deduped
-            )
-            if not dup:
-                deduped.append(det)
+        deduped, boxes_px = frame_vehicle_detections(result, args.hood_y, pixel_to_plane)
         per_frame_dets.append(deduped)
         if prev_gray is not None:
             motion_raw.append(road_change_fraction(prev_gray, gray, boxes_px, args.hood_y))

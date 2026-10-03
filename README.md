@@ -20,6 +20,18 @@ https://github.com/user-attachments/assets/67493732-938b-49a3-a3e0-4eb19a2c54c7
 
 https://github.com/user-attachments/assets/83700b90-3ecf-4527-bca8-598f89717c22
 
+**選一台車量時速**:在任一張畫面上框出一台車,輸入自己的車速,程式算出這台車的距離與時速。
+
+![框出正前方的車:8.5 公尺、119 km/h](docs/media/select_lead_car.jpg)
+
+正前方那台車:程式算出 119 km/h,車上雷達量到 121 km/h。
+
+![同一張畫面框五台車,兩台太遠標成白框](docs/media/select_multi_car.jpg)
+
+- **彩色框**:量得準。框上的數字是「與這台車的距離」和「這台車的時速」。
+- **白框白字**:量不準(這兩張都是因為距離太遠),數字只供參考。加上 `--hide-unreliable` 時,量不準的車不畫出來,也不回傳時速。
+- 自己的車速由使用者輸入(這裡用車上的車速表),所以誤差只來自「兩車距離的變化」這一項。程式在 `tools/selected_vehicle_speed.py`。
+
 專題實際處理的台灣案例來自交通事故鑑識案件,影片不公開,所以這裡用公開資料集展示。
 
 ## 做法
