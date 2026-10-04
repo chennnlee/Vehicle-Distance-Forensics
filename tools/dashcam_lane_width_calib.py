@@ -1,4 +1,4 @@
-"""Scale anchor for dashcam clips: the legal lane width.
+"""Scale anchor for dashcam clips: the lane width.
 
 SHARP reconstructs with a fixed-FOV assumption, so its point cloud is correct
 in shape but arbitrary in absolute size -- every rig needs one metric anchor.
@@ -9,7 +9,9 @@ measured anywhere from 0.3 to 6.7 m), so length along the road is unusable.
 The lane WIDTH is measured across the road instead of along it: both lane
 lines are at similar depth, so the badly-conditioned direction drops out. Feed
 pairs of pixels on the left and right boundary of the ego lane, and the scale
-that makes their on-plane separation equal the legal width is the anchor.
+that makes their on-plane separation equal the lane width is the anchor. The
+width is a design value, not a legal one (3.50-3.75 m on Taiwan roads designed
+for 80 km/h and above), so a 3.75 m road read at 3.5 m comes out about 7 % small.
 
 The camera height it prints back is the independent sanity check: solving for
 scale from a lane width also fixes the height of the camera above the road, and
@@ -43,7 +45,9 @@ def parse_args() -> argparse.Namespace:
                     help="Semicolon-separated left/right lane-line pixel pairs at matching depth, "
                          "'lx,ly,rx,ry;...' (e.g. '728,700,1073,700;703,720,1116,720').")
     ap.add_argument("--lane-width-m", type=float, default=3.5,
-                    help="Legal lane width: 3.5 m on Taiwan freeways/expressways.")
+                    help="Lane width in metres. A design value, not a legal one: Taiwan's "
+                         "highway design code (Table 2.2.1) gives 3.50-3.75 m for design speeds "
+                         "of 80 km/h and above; the default is the lower end.")
     ap.add_argument("--out-json", default="", help="Optional path to write the calibration report.")
     return ap.parse_args()
 
@@ -132,7 +136,7 @@ def main() -> None:
     print(f"cam height: {height_m:.3f} m   <- sanity check, expect ~1.1-1.5 m for a windscreen mount")
     if not 1.0 <= height_m <= 1.6:
         print("  WARNING: implied mounting height is outside the plausible range; "
-              "check the lane-line pixels or whether the ego lane is really the legal width.")
+              "check the lane-line pixels or whether the ego lane really has the assumed width.")
 
     report = {"scale": scale, "scale_cv": cv, "camera_height_m": height_m,
               "lane_width_m": args.lane_width_m, "hood_y": args.hood_y,
