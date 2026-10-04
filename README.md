@@ -78,7 +78,7 @@ https://github.com/user-attachments/assets/83700b90-3ecf-4527-bca8-598f89717c22
 
 - **指導教授**:彭彥璁老師(政治大學資訊科學系)
 - **chennnlee**:行車紀錄器量測系統(自己的車速、周圍車輛的距離與時速、多車追蹤)、公開資料集與雷達驗證、路口監視器測速
-- **Terry**([terrytjh](https://github.com/terrytjh)):單眼深度模型比較、海盛人工真值比對。之後的工作在 [terrytjh/Monocular-Depth-Vehicle-Distance](https://github.com/terrytjh/Monocular-Depth-Vehicle-Distance)
+- **Terry**([terrytjh](https://github.com/terrytjh)):研究架構與文獻整理、單眼深度模型比較、標線幾何測距(以車道線消失點求地平線)、Argoverse 2 等外部驗證、海盛人工真值比對。之後的工作在 [terrytjh/Monocular-Depth-Vehicle-Distance](https://github.com/terrytjh/Monocular-Depth-Vehicle-Distance)
 - **題目與台灣案例**:海盛科技
 
 ## 怎麼重跑
