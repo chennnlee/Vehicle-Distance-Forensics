@@ -112,7 +112,7 @@
 - **錯誤**:(a) 用 `fwd = A/(y − y_h)` 兩參數擬合出的地平線說「與 SHARP 只差 0.7 px,所以俯仰正確」——**已撤回**;hs005 兩次跑分別得 596.6 與 599.1,那是偶然值。(b) dc006 的兩參數擬合把差異全算進地平線,報出「不用修正」,但每一組列對的實測都比預測系統性偏低(該案現行係數 0.903)。(c) 同型陷阱:雷達反解的 A 差 1.36 倍,不等於距離差 36%(近場實測比值是 0.995)。
 - **怎麼發現**:同一案重跑得到不同的地平線;逐列對檢查「實測/預測」比值。
 - **規則**:A 與 y_h 在有限距離跨幅下強烈交換,不引用分解出來的單一參數。俯仰用車道線消失點獨立量,但消失點本身要先通過抽線品質門檻(左右線點數足、擬合殘差小、兩線斜率像同一車道的兩側;08-19 那次只有 hs005 通過,dc006、wow001 作廢)。修正係數用「實測/預測」的直接中位數,片內一致性順帶檢驗地平線(逐對散布 >0.10 就拒發);引用分距離帶的實測比值,不引用 A。
-- **出處**:`tools/odometer_distance_calib.py` 修正係數段的註解(L184–187);hs005 的擬合值與消失點見 [`VALIDATION_STATUS.md`](VALIDATION_STATUS.md) 文末附錄;[`comma2k19_radar_eval/README.md`](../data/output/comma2k19_radar_eval/README.md) 第五節「附帶:SHARP 的地平線」;修正係數見 [`dashcam_demo/_calib/README.md`](../data/output/dashcam_demo/_calib/README.md);拒發門檻見 [`REPRODUCE.md`](../REPRODUCE.md)「自我檢查」;消失點品質門檻本檔為版控紀錄。
+- **出處**:`tools/odometer_distance_calib.py` 修正係數段的註解(L190–193);hs005 的擬合值與消失點見 [`VALIDATION_STATUS.md`](VALIDATION_STATUS.md) 文末附錄;[`comma2k19_radar_eval/README.md`](../data/output/comma2k19_radar_eval/README.md) 第五節「附帶:SHARP 的地平線」;修正係數見 [`dashcam_demo/_calib/README.md`](../data/output/dashcam_demo/_calib/README.md);拒發門檻見 [`REPRODUCE.md`](../REPRODUCE.md)「自我檢查」;消失點品質門檻本檔為版控紀錄。
 
 ### 12. 用管不到目標參數的觀測量下結論(2026-08-18 至 08-20)
 

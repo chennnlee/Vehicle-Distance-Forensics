@@ -44,8 +44,7 @@
   迴歸:AV2 十六支對 2026-09-21 封存的 `calib.json` **0 支不同**。
   **A9 的像素對現在可以用它補**,但高影格的相機必須明確傳入自己的判定列。
   出處:該檔判線段;2026-09-18 盤點;2026-09-28 修正與迴歸(分支 `terry/av2-marking-validation`)。
-- **A2 `tools/lane_dash_calibration.py --help` 崩潰**:help 字串裡的 `%` 沒跳脫,argparse 丟 `TypeError: %o format`。
-  下一步:改成 `%%`,跑一次 `--help` 確認。出處:2026-09-18 實測。
+- ~~**A2 `tools/lane_dash_calibration.py --help` 崩潰**~~ **已處理(2026-10-11)**:`--roi` help 字串的 `%` 改成 `%%`,`--help` 已能正常印出。
 - **A3 `data/output/dashcam_demo/_calib/effect.png` 用舊係數,右圖是預測值**:dc002 / dc008 仍是 hood-y 更正前的 0.831 / 0.886;
   右圖是 `tools/report/plot_distance_calib.py` 讀 `data/output/dashcam_demo/*_trackv3/ranges.csv`(沒有就讀基底資料夾)的距離中位數再乘係數,不是端到端實測。
   下一步二選一:(1) 右圖改讀 `data/output/dashcam_demo/*_current/ranges.csv` 的端到端中位數(已套係數,不要再乘);(2) 只換成現行 json 重畫,並在圖或 README 保留「右圖是預測」的標註。
@@ -77,11 +76,9 @@
   其餘四案(dc006、dc007、hs005、wow001)08-18 重算的掛高與原記錄值已收在 `docs/VALIDATION_STATUS.md` 文末附錄,抄進 CASE_PARAMETERS 時可一併引用。出處:2026-09-18 盤點。
 - ~~**A10 使用者自己的 5 支工具 docstring 仍指向本機筆記**~~ **已處理(2026-09-28)**:`comma2k19_radar_eval.py`、`lane_line_fit.py`、`lane_ridge_probe.py`、`odometer_regression_cases.py`、`solve_archived_hood.py`
   的說明改為指向對應的 docs。
-- **A11 `data/output/latest_run.txt` 在版控內**,內容是一個本機絕對路徑(指向已空的 `data/output/runs/`)。
-  下一步:`git rm --cached`(`data/output/**` 已在 `.gitignore`),本機目錄見 E。出處:`git ls-files data/output`。
-- **A12 `tools/report/README.md` 的簡報體例只記三條**:2026-09-03 定的是五條,缺「每個數字出現前先定義它怎麼算」與「外部素材(如雷達)交代來源與處理步驟」;
-  「名詞與數字都要說用途」也要寫完整:技術名詞第一次出現說明它在系統裡負責什麼,每個結果數字下附一條「怎麼解讀」。
-  下一步:補成五條。出處:該 README 的 `gen_radar_validation.js` 列;2026-09-03 使用者要求(本機筆記)。
+- ~~**A11 `data/output/latest_run.txt` 在版控內**~~ **已處理(2026-10-11)**:已 `git rm --cached`(`data/output/**` 在 `.gitignore` 內),本機檔案保留;空的 `data/output/runs/` 見 E。
+- ~~**A12 `tools/report/README.md` 的簡報體例只記三條**~~ **已處理(2026-10-11)**:該 README 新增「簡報體例」一節,補齊 2026-09-03 定的五條,
+  `gen_radar_validation.js` 列改為指向該節。
 - **A13 碼表程式側兩處小修**:`ego_speed.csv` 有值但 method 為 `none` 的列、`--help` 文字過時(`--dash-cycle-m` 的「高速公路 12 m」已於 2026-09-30 改成法定出處,其餘仍待修)。
   下一步與修法選項見 `docs/ODOMETER_DESIGN.md` 第 6 節,這裡不重複。
 - **A14 `data/output/dashcam_demo/README.md` 沒寫管線 B 版的追蹤器 v3**:2026-07-16(commit 8c2e992)從管線 A 移植,至今仍是現行行為(已讀碼確認),
@@ -90,10 +87,11 @@
   斷軌縫合改成 2D 相對平面版(空隙 ≤ 2 s、靈敏度 > 0.8 m/px 的遠場端點不縫合、`merged_from` 稽核)、平行鬼影抑制(兩條四輪軌中心距 < 1.2 m 的時間 ≥ 70% 判為鬼影,機車豁免)、
   多數決類別、`targets_summary.csv` 近場中位速與遠場粗估分欄;另在「方法」第 4 點補「沒有自車速的幀,他車絕對速留空、只給距離」。
   下一步:在「2026-08-02 追蹤器修正:關聯 px 一致性閘」之前加一小節。出處:`tools/dashcam_range_speed.py` 的 `CLASS_GROUP`、`stitch_fragments`、`suppress_simultaneous_duplicates`、`abs_kmh` 計算段;逐案迴歸結果見 `docs/VALIDATION_STATUS.md` ②。
-- **A15 `tools/odometer_distance_calib.py` 的檔首 docstring 有已撤回或已更正的說法**(公開可見):(1)「俯仰是對的(地平線列與碼表實測差 0.7–4.3 px)」,第 175 行註解也拿它當固定 y_h 的理由;
-  (2)「前向距離均勻偏高 9–34%」;(3)「fx = 0.7955×寬」;(4)「輸出的修正係數 `A_碼表 / A_SHARP`」,實際輸出的是逐列對「實測/預測」的直接中位數(同檔 L183–196)。
-  下一步改成:距離偏高 11–32%;俯仰證據用 hs005 車道線消失點(差 4.6 px),不引用兩參數擬合出的地平線;焦距依 PLY 內參,不寫固定 0.7955×寬;係數為直接中位比值。
-  出處:`docs/VALIDATION_STATUS.md` 文末附錄;`docs/METHODOLOGY_PITFALLS.md` 第 11 條;SHARP 焦距的更正見 Terry 的 commit 6e70403。
+- ~~**A15 `tools/odometer_distance_calib.py` 的檔首 docstring 有已撤回或已更正的說法**~~ **已處理(2026-10-11)**:
+  檔首改為:距離偏高 11–32%;主因是焦距,工具讀點雲帶回的內參、不寫固定 0.7955×寬;俯仰證據只引用 hs005 車道線消失點(差 4.6 px),
+  不引用兩參數擬合出的地平線;係數是逐列對「實測/預測」的直接中位數,以 `--distance-correction` 只縮前向。
+  一參數擬合分支的註解改為「A 與 y_h 拆不開才固定 SHARP 地平線,不表示地平線已驗證」(hs005 差 4.6 px、comma2k19 雷達段差約 9–13 px)。
+  只改註解,程式行為不變;`docs/METHODOLOGY_PITFALLS.md` 第 11 條引用的行號隨之改為 L190–193。
 - **A16 幾份 README 還沒指向 2026-09-18 新收進 docs 的技術內容**:`data/output/dashcam_demo/_calib/README.md` 與 `docs/CASE_PARAMETERS.md` 係數段的「依據」→ `docs/VALIDATION_STATUS.md` 文末附錄
   (含 09-01 內參修正對已發表係數只有 −0.17%~−0.44%、不必重算);`data/output/detector_vs_radar/README.md` 第五節之後 → `docs/VALIDATION_STATUS.md` ③ 的幾何項拆解與方向性觀測;
   `docs/FAILURE_BOUNDARIES.md` 末段「貼地視角虛線 3D 取樣」→ 量級見 `docs/VALIDATION_STATUS.md` ⑤;`data/output/dashcam_validation/README.md` 加一行「這批對方車全部不可測,只驗自車速」(見 D7)。

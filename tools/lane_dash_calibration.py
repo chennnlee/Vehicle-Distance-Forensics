@@ -238,7 +238,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--image", required=True, help="Input image path.")
     parser.add_argument("--pointcloud", required=True, help="Matching SHARP PLY path.")
     parser.add_argument("--out-dir", required=True, help="Output directory for the report JSON and annotated PNG.")
-    parser.add_argument("--roi", default="", help="Search region x1,y1,x2,y2. Default: lower 60% of the image.")
+    parser.add_argument("--roi", default="", help="Search region x1,y1,x2,y2. Default: lower 60%% of the image.")
     parser.add_argument("--dash-length-m", type=float, default=4.0, help="Legal dash segment length in meters (Taiwan default 4m).")
     parser.add_argument("--spec-gap-ratio", type=float, default=1.5, help="Legal gap/dash ratio used for the plausibility check (6m/4m).")
     parser.add_argument("--local-contrast", type=int, default=20, help="Brightness-above-local-background threshold.")
