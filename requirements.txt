@@ -5,6 +5,7 @@ pandas
 opencv-python
 matplotlib
 ultralytics          # YOLO 偵測/分割(會自行拉 torch、torchvision)
+gradio               # 選一台車的圖形介面(tools/selected_vehicle_gui.py;只用命令列版的話不需要)
 
 # 讀人工標註真值(*_manual.xlsx)
 openpyxl

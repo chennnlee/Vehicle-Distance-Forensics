@@ -34,6 +34,7 @@
 |---|---|
 | `tools/dashcam_range_speed.py` | 行車紀錄器自車速、跟車距離、他車絕對時速 |
 | `tools/selected_vehicle_speed.py` | 在一張畫面上框選一台車、輸入自車速,算出它的距離與時速;量不準時標白框或不回傳 |
+| `tools/selected_vehicle_gui.py` | 上一支的圖形介面(瀏覽器開 http://127.0.0.1:7860):選案例、拖時間軸選畫面、填自車速、點兩下框車;七支 demo 的參數已內建,量測結果與命令列版相同;另可做前後各 3 秒的跟車影片(本車車速逐幀讀完整管線的 `ego_speed.csv`,沒有讀值的幀只給距離;也可改成整段用輸入值。相對速度每幀各自擬合) |
 | `tools/dashcam_lane_width_calib.py` | 車道寬尺度校正;反推相機高度當自洽檢查 |
 | `tools/lane_line_fit.py` | 從多幀累積的亮線擬出左右車道線,印出 `--pairs` 與消失點(不靠目視挑點) |
 | `tools/odometer_distance_calib.py` | 用碼表訊號算出每台相機的前後方向距離修正係數 |

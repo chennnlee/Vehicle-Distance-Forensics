@@ -30,6 +30,8 @@
   too_few_frames  前後找到的同一台車不到 5 幀或跨不到 0.3 秒,斜率不可信
 未涵蓋:擦身而過的側向目標(docs/FAILURE_BOUNDARIES.md)目前沒有量化門檻,工具不會自動判斷。
 
+圖形介面版:tools/selected_vehicle_gui.py(同一組函式,在瀏覽器裡選畫面、填車速、點兩下框車)。
+
 用法範例(hs005,參數見 docs/CASE_PARAMETERS.md):
   python tools/selected_vehicle_speed.py --frames-dir /tmp/hs005_frames --fps 29.8883 \\
       --reference-pointcloud data/output/sharp_gaussians/hs005_ref.ply \\
@@ -151,41 +153,54 @@ def follow(start: dict, frame_dets: dict[int, list[dict]], order: list[int], f0:
         tr.update(pos=best["pos"], bh=best["bh"], t=t,
                   cx=(best["box"][0] + best["box"][2]) * 0.5, cy=(best["box"][1] + best["box"][3]) * 0.5,
                   bw=best["box"][2] - best["box"][0])
-        out.append({"frame": i, "t": (i - f0) / fps, "fwd_m": float(best["pos"][1])})
+        out.append({"frame": i, "t": (i - f0) / fps, "fwd_m": float(best["pos"][1]), "det": best})
     return out
 
 
 def window_detections(frames: list[Path], f0: int, model, pixel_to_plane, fps: float, hood_y: int,
-                      conf: float, window_s: float) -> dict[int, list[dict]]:
-    """所選畫面前後各半個時間窗內,每一幀的車輛偵測。同一幀量好幾台車時共用這一份。"""
+                      conf: float, window_s: float, progress=None) -> dict[int, list[dict]]:
+    """所選畫面前後各半個時間窗內,每一幀的車輛偵測。同一幀量好幾台車時共用這一份。
+    progress(已完成幀數, 總幀數) 給圖形介面顯示進度用。"""
     half = max(1, int(round(window_s * fps / 2)))
+    span = range(max(0, f0 - half), min(len(frames) - 1, f0 + half) + 1)
     out = {}
-    for i in range(max(0, f0 - half), min(len(frames) - 1, f0 + half) + 1):
+    for n, i in enumerate(span, 1):
         result = model.predict(source=cv2.imread(str(frames[i])), conf=conf, verbose=False)[0]
         out[i] = frame_vehicle_detections(result, hood_y, pixel_to_plane)[0]
+        if progress:
+            progress(n, len(span))
     return out
 
 
-def measure(frame_dets: dict[int, list[dict]], f0: int, ego_kmh: float, box: list[float], fps: float,
-            hood_y: int, max_sens: float) -> dict:
-    """回傳一台車在第 f0 幀的距離、相對速度與速度,以及不準確的理由。"""
-    lo, hi = min(frame_dets), max(frame_dets)
-    res = {"frame": f0, "ego_kmh": ego_kmh, "box_input": box, "reasons": []}
+def match_target(frame_dets: dict[int, list[dict]], f0: int, box: list[float]) -> tuple[float, dict | None]:
+    """使用者的框對到第 f0 幀的哪一個偵測(IoU 最大者);對不到回傳 None。"""
     scored = [(iou(box, d["box"]), d) for d in frame_dets[f0]]
     score, target = max(scored, key=lambda s: s[0], default=(0.0, None))
-    if target is None or score < MIN_IOU:
-        res["reasons"].append("below_hood" if box[3] >= hood_y - 2 else "no_detection")
-        return res
+    return (score, target) if target is not None and score >= MIN_IOU else (score, None)
 
-    res.update({"class": target["cls"], "matched_box": target["box"], "match_iou": round(score, 3),
-                "ground_px": [target["px"], target["py"]], "range_m": float(target["pos"][1]),
-                "lat_m": float(target["pos"][0]), "sens_m_per_px": target["sens"]})
-    if not np.isfinite(target["sens"]) or target["sens"] > max_sens:
+
+def chain_of(frame_dets: dict[int, list[dict]], f0: int, target: dict, fps: float) -> list[dict]:
+    """從 f0 往前、往後接同一台車,涵蓋 frame_dets 的全部幀;依幀號排好。"""
+    lo, hi = min(frame_dets), max(frame_dets)
+    return (follow(target, frame_dets, list(range(f0 - 1, lo - 1, -1)), f0, fps)[::-1]
+            + [{"frame": f0, "t": 0.0, "fwd_m": float(target["pos"][1]), "det": target}]
+            + follow(target, frame_dets, list(range(f0 + 1, hi + 1)), f0, fps))
+
+
+def place(res: dict, det: dict, max_sens: float, match_iou: float | None = None) -> None:
+    """把偵測到的位置寫進結果;接地點每像素超過 max_sens 公尺時記 far_field。"""
+    res.update({"class": det["cls"], "matched_box": det["box"]})
+    if match_iou is not None:
+        res["match_iou"] = round(match_iou, 3)
+    res.update({"ground_px": [det["px"], det["py"]], "range_m": float(det["pos"][1]),
+                "lat_m": float(det["pos"][0]), "sens_m_per_px": det["sens"]})
+    if not np.isfinite(det["sens"]) or det["sens"] > max_sens:
         res["reasons"].append("far_field")
 
-    obs = (follow(target, frame_dets, list(range(f0 - 1, lo - 1, -1)), f0, fps)[::-1]
-           + [{"frame": f0, "t": 0.0, "fwd_m": float(target["pos"][1])}]
-           + follow(target, frame_dets, list(range(f0 + 1, hi + 1)), f0, fps))
+
+def fit_relative(res: dict, obs: list[dict], ego_kmh: float | None) -> dict:
+    """obs 的 t 以結果那一幀為 0;用「距離對時間」的斜率當相對速度。
+    ego_kmh 為 None(本車車速沒有讀值)時只給距離與相對速度,記 no_ego。"""
     tt = np.array([o["t"] for o in obs])
     res["n_frames_used"] = len(obs)
     res["span_s"] = float(tt[-1] - tt[0])
@@ -194,8 +209,46 @@ def measure(frame_dets: dict[int, list[dict]], f0: int, ego_kmh: float, box: lis
     if len(obs) >= 2 and res["span_s"] > 0:
         rel_ms = float(np.polyfit(tt, [o["fwd_m"] for o in obs], 1)[0])  # +: 拉開距離
         res["rel_kmh"] = rel_ms * 3.6
-        res["speed_kmh"] = ego_kmh + rel_ms * 3.6
+        if ego_kmh is not None:
+            res["speed_kmh"] = ego_kmh + rel_ms * 3.6
+    if ego_kmh is None:
+        res["reasons"].append("no_ego")
     return res
+
+
+def measure(frame_dets: dict[int, list[dict]], f0: int, ego_kmh: float, box: list[float], fps: float,
+            hood_y: int, max_sens: float) -> dict:
+    """回傳一台車在第 f0 幀的距離、相對速度與速度,以及不準確的理由。"""
+    res = {"frame": f0, "ego_kmh": ego_kmh, "box_input": box, "reasons": []}
+    score, target = match_target(frame_dets, f0, box)
+    if target is None:
+        res["reasons"].append("below_hood" if box[3] >= hood_y - 2 else "no_detection")
+        return res
+    place(res, target, max_sens, score)
+    return fit_relative(res, chain_of(frame_dets, f0, target, fps), ego_kmh)
+
+
+def track(frame_dets: dict[int, list[dict]], f0: int, ego_kmh: float | None, box: list[float], fps: float,
+          max_sens: float, window_s: float, ego_series: dict[int, float | None] | None = None) -> dict[int, dict]:
+    """把選的車在 frame_dets 涵蓋的每一幀都量一次,做跟車影片用:回傳 {幀號: 結果},追不到的幀不在裡面。
+    本車車速整段都用 ego_kmh;給 ego_series({幀號: km/h,沒有讀值為 None})時改用逐幀的值,
+    沒有讀值的幀只給距離與相對速度。每一幀的相對速度只用該幀前後各半個 window_s 內的軌跡點,
+    判準與 measure() 相同,所以選的那一幀與 measure() 的距離、速度一致(差在少了 match_iou)。
+    車追丟(斷開超過 MAX_GAP_S)後就不再接。"""
+    _, target = match_target(frame_dets, f0, box)
+    if target is None:
+        return {}
+    chain = chain_of(frame_dets, f0, target, fps)
+    half = max(1, int(round(window_s * fps / 2)))
+    out = {}
+    for o in chain:
+        i = o["frame"]
+        ego_i = ego_kmh if ego_series is None else ego_series.get(i)
+        res = {"frame": i, "ego_kmh": ego_i, "box_input": box, "reasons": []}
+        place(res, o["det"], max_sens)
+        obs = [{"t": (p["frame"] - i) / fps, "fwd_m": p["fwd_m"]} for p in chain if abs(p["frame"] - i) <= half]
+        out[i] = fit_relative(res, obs, ego_i)
+    return out
 
 
 def finalize(res: dict, hide_unreliable: bool) -> dict:

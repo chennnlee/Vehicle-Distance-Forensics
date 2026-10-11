@@ -42,7 +42,7 @@ from selected_vehicle_speed import PROJECT_ROOT, finalize, measure, window_detec
 from dashcam_range_speed import build_geometry                                     # noqa: E402
 
 REASON_ZH = {"far_field": "太遠", "too_few_frames": "前後追不到", "below_hood": "太近",
-             "no_detection": "找不到車"}
+             "no_detection": "找不到車", "no_ego": "本車車速無讀值"}
 
 
 def parse_args() -> argparse.Namespace:
@@ -68,6 +68,69 @@ def parse_args() -> argparse.Namespace:
     return ap.parse_args()
 
 
+def draw_results(im: Image.Image, results: list[dict], ego_kmh: float, hide_unreliable: bool,
+                 ego_caption: str, source: str) -> Image.Image:
+    """Draw the module's results on one frame; returns a new RGB image.
+    Shared with tools/selected_vehicle_gui.py so both draw the same way. An entry may be
+    None (a car not tracked in this frame of a follow video); it keeps the other cars'
+    colours fixed, since a car's colour comes from its position in the list."""
+    W, H = im.size
+    f_big, f_mid, f_small = (load_font(int(s * W / 1164)) for s in (30, 21, 16))
+    ov = Image.new("RGBA", im.size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(ov)
+    placed: list[tuple[float, float, float, float]] = []
+    order = sorted((k for k in range(len(results)) if results[k] is not None),
+                   key=lambda k: -results[k].get("ground_px", [0, H])[1])
+    for k in order:
+        r = results[k]
+        if r["status"] != "ok" and hide_unreliable:
+            continue
+        x1, y1, x2, y2 = r.get("matched_box", r["box_input"])
+        if r["status"] == "ok":
+            col, width, fg, bg = PALETTE[k % len(PALETTE)], 3, (255, 255, 255, 255), None
+            text = f"{r['range_m']:.1f} m  {r['speed_kmh']:.0f} km/h"
+        else:
+            col, width, fg, bg = (255, 255, 255), 2, (255, 255, 255, 255), (10, 14, 22, 170)
+            why = "、".join(REASON_ZH.get(x, x) for x in r["reasons"])
+            if r["status"] != "no_measurement":
+                text = f"{r['range_m']:.0f} m  {r['speed_kmh']:.0f} km/h({why},不準)"
+            elif "range_m" in r:        # 量得到距離、算不出時速(例如本車車速沒有讀值)
+                text = f"{r['range_m']:.1f} m({why},無時速)"
+            else:
+                text = f"{why},無法量測"
+        d.rectangle((x1, y1, x2, y2), outline=col + (255,), width=width)
+        if "ground_px" in r:
+            gx, gy = r["ground_px"]
+            d.ellipse((gx - 4, gy - 4, gx + 4, gy + 4), fill=col + (255,))
+        tw = d.textlength(text, font=f_mid)
+        tx = min(max(4, x1), W - tw - 10)
+        ty = max(70, y1 - 34)
+        for _ in range(8):
+            lab = (tx - 6, ty - 4, tx + tw + 6, ty + 30)
+            if all(lab[2] <= p[0] or lab[0] >= p[2] or lab[3] <= p[1] or lab[1] >= p[3] for p in placed):
+                break
+            ty -= 34
+        placed.append((tx - 6, ty - 4, tx + tw + 6, ty + 30))
+        rounded_label(d, (int(tx), int(ty)), text, f_mid, fg, bg or (col + (215,)))
+
+    d.rectangle((0, 0, W, 58), fill=(10, 14, 22, 175))
+    d.text((16, 12), "自車速", font=f_mid, fill=(200, 210, 225, 255))
+    ego_txt = f"{ego_kmh:.0f} km/h" if ego_kmh is not None else "無讀值"
+    x = 16 + d.textlength("自車速 ", font=f_mid)
+    d.text((x, 6), ego_txt, font=f_big, fill=(255, 255, 255, 255))
+    d.text((x + d.textlength(ego_txt + "  ", font=f_big), 16), ego_caption, font=f_small,
+           fill=(170, 182, 200, 255))
+    sw = d.textlength(source, font=f_small)
+    d.text((W - sw - 16, 19), source, font=f_small, fill=(170, 182, 200, 255))
+    leg = ("彩色框:量得準,框上是距離與時速;量不準的車不顯示" if hide_unreliable
+           else "彩色框:量得準,框上是距離與時速;白框白字:量不準,數字只供參考")
+    lw = d.textlength(leg, font=f_small)
+    d.rounded_rectangle((12, H - 40, 28 + lw, H - 10), radius=6, fill=(10, 14, 22, 160))
+    d.text((20, H - 36), leg, font=f_small, fill=(225, 230, 238, 255))
+
+    return Image.alpha_composite(im.convert("RGBA"), ov).convert("RGB")
+
+
 def main() -> None:
     a = parse_args()
     frames = sorted(Path(a.frames_dir).glob("*.jpg")) + sorted(Path(a.frames_dir).glob("*.png"))
@@ -91,57 +154,9 @@ def main() -> None:
         Path(a.out_json).write_text(json.dumps(results, ensure_ascii=False, indent=1, default=float),
                                     encoding="utf-8")
 
-    f_big, f_mid, f_small = (load_font(int(s * W / 1164)) for s in (30, 21, 16))
-    ov = Image.new("RGBA", im.size, (0, 0, 0, 0))
-    d = ImageDraw.Draw(ov)
-    placed: list[tuple[float, float, float, float]] = []
-    order = sorted(range(len(results)), key=lambda k: -results[k].get("ground_px", [0, H])[1])
-    for k in order:
-        r = results[k]
-        if r["status"] != "ok" and a.hide_unreliable:
-            continue
-        x1, y1, x2, y2 = r.get("matched_box", r["box_input"])
-        if r["status"] == "ok":
-            col, width, fg, bg = PALETTE[k % len(PALETTE)], 3, (255, 255, 255, 255), None
-            text = f"{r['range_m']:.1f} m  {r['speed_kmh']:.0f} km/h"
-        else:
-            col, width, fg, bg = (255, 255, 255), 2, (255, 255, 255, 255), (10, 14, 22, 170)
-            why = "、".join(REASON_ZH.get(x, x) for x in r["reasons"])
-            text = (f"{why},無法量測" if r["status"] == "no_measurement"
-                    else f"{r['range_m']:.0f} m  {r['speed_kmh']:.0f} km/h({why},不準)")
-        d.rectangle((x1, y1, x2, y2), outline=col + (255,), width=width)
-        if "ground_px" in r:
-            gx, gy = r["ground_px"]
-            d.ellipse((gx - 4, gy - 4, gx + 4, gy + 4), fill=col + (255,))
-        tw = d.textlength(text, font=f_mid)
-        tx = min(max(4, x1), W - tw - 10)
-        ty = max(70, y1 - 34)
-        for _ in range(8):
-            lab = (tx - 6, ty - 4, tx + tw + 6, ty + 30)
-            if all(lab[2] <= p[0] or lab[0] >= p[2] or lab[3] <= p[1] or lab[1] >= p[3] for p in placed):
-                break
-            ty -= 34
-        placed.append((tx - 6, ty - 4, tx + tw + 6, ty + 30))
-        rounded_label(d, (int(tx), int(ty)), text, f_mid, fg, bg or (col + (215,)))
-
-    d.rectangle((0, 0, W, 58), fill=(10, 14, 22, 175))
-    d.text((16, 12), "自車速", font=f_mid, fill=(200, 210, 225, 255))
-    ego_txt = f"{a.ego_kmh:.0f} km/h"
-    x = 16 + d.textlength("自車速 ", font=f_mid)
-    d.text((x, 6), ego_txt, font=f_big, fill=(255, 255, 255, 255))
-    d.text((x + d.textlength(ego_txt + "  ", font=f_big), 16), a.ego_caption, font=f_small,
-           fill=(170, 182, 200, 255))
-    sw = d.textlength(a.source, font=f_small)
-    d.text((W - sw - 16, 19), a.source, font=f_small, fill=(170, 182, 200, 255))
-    leg = ("彩色框:量得準,框上是距離與時速;量不準的車不顯示" if a.hide_unreliable
-           else "彩色框:量得準,框上是距離與時速;白框白字:量不準,數字只供參考")
-    lw = d.textlength(leg, font=f_small)
-    d.rounded_rectangle((12, H - 40, 28 + lw, H - 10), radius=6, fill=(10, 14, 22, 160))
-    d.text((20, H - 36), leg, font=f_small, fill=(225, 230, 238, 255))
-
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    Image.alpha_composite(im.convert("RGBA"), ov).convert("RGB").save(out, quality=90)
+    draw_results(im, results, a.ego_kmh, a.hide_unreliable, a.ego_caption, a.source).save(out, quality=90)
     for r in results:
         spd = "—" if r.get("speed_kmh") is None else f"{r['speed_kmh']:.1f}"
         print(f"{r['status']:>14}  range {r.get('range_m', float('nan')):5.1f} m  speed {spd}  {r['reasons']}")
