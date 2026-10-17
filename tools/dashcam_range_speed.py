@@ -87,6 +87,13 @@ def parse_args() -> argparse.Namespace:
                         help="Speed change per second the joint octave choice treats as free, as a "
                         "fraction of speed. 1.5 is far above any real vehicle and far below the 0.69 "
                         "log-jump an octave costs, which is the only thing it needs to separate.")
+    parser.add_argument("--stopped-policy", choices=("zero", "flag"), default="zero",
+                        help="What the standstill vote does. It only fires where the dash odometer has no "
+                        "reading, so on moving footage it marks an odometer gap rather than a stop. 'zero' "
+                        "(default, reproduces archived runs) pins 0 km/h, which also anchors the gap "
+                        "interpolation. 'flag' leaves the speed empty and labels the frame "
+                        "stopped_candidate; values the final 1 s rolling median fills into empty frames "
+                        "are labelled median_fill. Absolute target speed is then empty where ego is.")
     parser.add_argument("--distance-correction", type=float, default=1.0,
                         help="Multiplier on forward distance, from "
                         "tools/odometer_distance_calib.py. SHARP's fixed-FOV assumption reads "
@@ -950,8 +957,11 @@ def main() -> None:
         print(f"dash odometer: coverage {use.mean()*100:.0f}%  "
               f"median {np.nanmedian(v_odo[use])*3.6 if use.any() else float('nan'):.1f} km/h  "
               f"median conf {np.median(np.minimum(c1, c2)[use]) if use.any() else 0:.2f}")
-    ego_s[stopped] = 0.0
-    ego_method[stopped] = "stopped"
+    if args.stopped_policy == "zero":
+        ego_s[stopped] = 0.0
+        ego_method[stopped] = "stopped"
+    else:
+        ego_method[stopped] = "stopped_candidate"   # no value, so not an interpolation anchor
     good = np.isfinite(ego_s)
     if good.any() and (~good).any():
         idx = np.arange(n)
@@ -971,6 +981,8 @@ def main() -> None:
         ego_s = np.array([np.nanmedian(ego_s[max(0, i - pad2): i + pad2 + 1])
                           if np.isfinite(ego_s[max(0, i - pad2): i + pad2 + 1]).any() else np.nan
                           for i in range(len(ego_s))])
+    if args.stopped_policy == "flag":
+        ego_method[np.isfinite(ego_s) & np.isin(ego_method, ["none", "stopped_candidate"])] = "median_fill"
 
     # --- pass 2: relative tracking on the plane -----------------------------
     next_id = 1
@@ -1098,7 +1110,8 @@ def main() -> None:
         w.writerow(["frame_idx", "t_s", "ego_visual_kmh", "method"])
         for i in range(len(frames)):
             val = f"{ego_s[i] * 3.6:.1f}" if np.isfinite(ego_s[i]) else ""
-            w.writerow([i, f"{i * dt:.3f}", val, ego_method[i] if val else "none"])
+            w.writerow([i, f"{i * dt:.3f}", val, ego_method[i] if val else
+                        ("stopped_candidate" if ego_method[i] == "stopped_candidate" else "none")])
 
     range_csv = out_dir / "ranges.csv"
     with range_csv.open("w", newline="", encoding="utf-8") as fh:

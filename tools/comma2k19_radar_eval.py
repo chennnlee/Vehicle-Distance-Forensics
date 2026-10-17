@@ -392,22 +392,28 @@ def main() -> None:
     curve = [(L, stats(shift_in_runs(v_ours, L) - v_rad)["mae"])
              for L in range(-lag_max, lag_max + 1)]
     curve = [(L, m) for L, m in curve if np.isfinite(m)]
-    bestL, bestM = min(curve, key=lambda z: z[1])
-    zero = dict(curve).get(0, float("nan"))
-    # A lag is only believable if it is also consistent across segments and does not
-    # sit at the edge of the search. On nearly-constant speeds the sweep can always
-    # shave the MAE by sliding one slowly-wandering error onto another, so the
-    # verdict here is deliberately weak and the caller is expected to compare signs.
-    edge = abs(bestL) >= lag_max - 1
-    print(f"   lag sweep: best {bestL:+d} frames ({bestL/fps:+.2f} s) MAE {bestM:.2f}; "
-          f"zero lag MAE {zero:.2f}"
-          + ("  -> at the edge of the search, treat as unresolved" if edge
-             else "  -> improves by %.0f%%, check the sign against other segments"
-                  % (100 * (1 - bestM / zero)) if bestM < 0.9 * zero
-             else "  -> no meaningful delay"))
-    res["lag"] = {"best_frames": int(bestL), "best_s": bestL / fps,
-                  "best_mae": float(bestM), "zero_mae": float(zero),
-                  "curve": [[int(L), float(m)] for L, m in curve]}
+    if not curve:
+        # No paired frame has our own ego speed (dash odometer never locked), so there is
+        # no speed series to slide. Distances and relative speeds are still valid.
+        print("   lag sweep skipped: no paired frame has our ego speed")
+        res["lag"] = None
+    else:
+        bestL, bestM = min(curve, key=lambda z: z[1])
+        zero = dict(curve).get(0, float("nan"))
+        # A lag is only believable if it is also consistent across segments and does not
+        # sit at the edge of the search. On nearly-constant speeds the sweep can always
+        # shave the MAE by sliding one slowly-wandering error onto another, so the
+        # verdict here is deliberately weak and the caller is expected to compare signs.
+        edge = abs(bestL) >= lag_max - 1
+        print(f"   lag sweep: best {bestL:+d} frames ({bestL/fps:+.2f} s) MAE {bestM:.2f}; "
+              f"zero lag MAE {zero:.2f}"
+              + ("  -> at the edge of the search, treat as unresolved" if edge
+                 else "  -> improves by %.0f%%, check the sign against other segments"
+                      % (100 * (1 - bestM / zero)) if bestM < 0.9 * zero
+                 else "  -> no meaningful delay"))
+        res["lag"] = {"best_frames": int(bestL), "best_s": bestL / fps,
+                      "best_mae": float(bestM), "zero_mae": float(zero),
+                      "curve": [[int(L), float(m)] for L, m in curve]}
 
     # ------------------------------------------- does our own far-range flag work?
     print(f"\n-- against the pipeline's own sensitivity flag --")

@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 import re
 import subprocess
 import zipfile
@@ -47,6 +48,10 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--truth", choices=("can", "pose"), default="can", help="Which record gt.csv carries.")
     ap.add_argument("--fps", type=float, default=20.0, help="comma EON road camera rate.")
     ap.add_argument("--no-frames", action="store_true", help="Write truth CSVs only, skip hevc decode.")
+    ap.add_argument("--ffmpeg", default=os.environ.get("FFMPEG", "ffmpeg"),
+                    help="ffmpeg binary used to decode the hevc (default: $FFMPEG, else the one on PATH). Builds "
+                    "decode to slightly different pixels (4.4.2 vs 8.0.1: mean |diff| ~0.8 grey levels), which is "
+                    "enough to change borderline detections; pin it to reproduce an archived run.")
     return ap.parse_args()
 
 
@@ -73,6 +78,9 @@ def main() -> None:
     args = parse_args()
     zpath = Path(args.zip)
     out_root = Path(args.out_root)
+    if not args.no_frames:
+        ver = subprocess.run([args.ffmpeg, "-version"], capture_output=True, text=True).stdout.splitlines()[0]
+        print(f"decoder: {args.ffmpeg} ({ver})")
     zf = zipfile.ZipFile(zpath)
     names = zf.namelist()
 
@@ -156,7 +164,7 @@ def main() -> None:
                 with zf.open(f"{base}/video.hevc") as src, open(vid, "wb") as dst:
                     while chunk := src.read(1 << 20):
                         dst.write(chunk)
-                subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                subprocess.run([args.ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
                                 "-i", str(vid), "-vsync", "0", "-qscale:v", "2",
                                 str(fdir / "f%05d.jpg")], check=True)
                 vid.unlink()
