@@ -1,0 +1,24 @@
+{
+ "d_m": [
+  30.0,
+  40.0,
+  44.99907365526722,
+  56.19879032201142,
+  70.4479918181315,
+  83.88091811554116
+ ],
+ "factor": [
+  1.0,
+  1.1224386490807157,
+  1.1429556163339483,
+  1.1991772620634042,
+  1.2582766845499729,
+  1.2203495828822704
+ ],
+ "far_only_m": [
+  30.0,
+  40.0
+ ],
+ "learned_from": "196 segments, 21 drives of car 2 Chunk_3 (development), drive-weighted",
+ "_about": "Distance correction of method A for comma2k19 car 2 (99c94dc769b5d96e), used with --distance-correction: factor 1 up to 30 m (predicted), log factor linear to the 40 m value, then the development table (drive-weighted median of log(radar / predicted) in bins of predicted distance; corrects DA3's shortening far away). Learned on Chunk_3 (development), all 202 segments, at the registered same-camera scales (day 1.2538, night 1.0599), scored with the shared config of D13."
+}
