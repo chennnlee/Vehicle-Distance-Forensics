@@ -120,3 +120,12 @@
   - **路段中途換路類**:一段片只有一個路類。換路類的那部分,本車速度會讀成一半或兩倍;影像選週期只能救回一部分。
   - **夜間**:一般道路夜間碼表常讀不到(留空),偵測器夜間找到的車很少(開發找到率 13%)。
   - **第 3 包的路類/日夜判定**由開發者自己判,可能比第 8 包的判定樂觀。
+
+## 追記 1(2026-10-19,登錄推上後、任何預測之前)
+
+- **v2own 的封存**:v2own 和 v2 是同一次推論,不進共同成績,也不能用 `mddbench seal` 封(同一個方法只能封一次)。
+  第 8 包真值產生之前,把 v2own 每段 `ego.csv`、`objects.csv`、`meta.json` 的 sha256 清單寫成 `pipeline/seals/v2own_comma2k19_chunk8.json`,
+  commit 並推到 Vehicle-Distance-Forensics。
+- **預測用的影格**:從 `/mnt/d/vdf_data/mddbench/chunk8/segments` 複製到 WSL 磁碟(共用 repo 工作目錄 `data/work/chunk8_wsl/segments`)。
+  `check-frames` 的合併雜湊與 `c2656b4c…f6db2` 相同才開始。
+- **兩個程序並跑**:批次清單依行號奇偶分兩半,各跑一個 `run.py`,輸出到同一個資料夾。每段各自獨立,不影響結果。
