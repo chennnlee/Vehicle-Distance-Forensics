@@ -18,7 +18,9 @@ Two readings go through the scorer's own per-segment function (mddbench.score.sc
   - v2own (item 7), which the scorer only takes with a seal; its files are first checked against
     pipeline/seals/v2own_comma2k19_chunk8.json as pushed in b6dddc7, and its truth must be built after that.
 The same function on v2 must give back the scorer's pairs.csv and ego_bins.csv, or nothing is judged.
-Also reported, not judged: the distance items under the config's other truth offsets, and per drive.
+Also reported, not judged: the distance items under the config's other truth offsets, per drive, and the D9 spot-check
+of the label table (d9_chunk8.csv, sample from d9_sample_chunk8.py): the segments where the checker's labels differ,
+and the groups with the checker's labels on the sampled segments.
 This file sits outside pipeline/*.py, so the code hash of the predictions (pipeline/batch.py code_sha256) is unchanged.
 """
 from __future__ import annotations
@@ -49,6 +51,8 @@ GROUPS = {PRIMARY: lambda r, l: l == "day" and r in ("ca_highway", "unknown"),
 COUNTS = {PRIMARY: 126, "day_ca_local": 43, "night": 39, "all": 208}  # registration §2
 ROADS, LIGHTS = {"ca_highway", "ca_local", "unknown"}, {"day", "night"}
 TITLES = {PRIMARY: "主要組(白天高速公路 + 判不出來)", "day_ca_local": "白天一般道路", "night": "夜間", "all": "全部"}
+NAMES = {"ca_highway": "高速公路", "ca_local": "一般道路", "unknown": "判不出來", "day": "白天", "night": "夜間"}
+D9 = HERE / "d9_chunk8.csv"
 DIST_ITEMS = ("1a", "1b", "2a", "2b", "3a", "3b", "7", "8", "9")
 
 
@@ -141,6 +145,33 @@ def rescore(S, F, cfg: dict, pred_root: Path, truth_root: Path, segments_root: P
         rows.append({"segment_id": sid, "n_pairs": len(r["pairs"]), "truth_in_scope": r["truth_in_scope"]})
     return (pd.DataFrame(pairs, columns=S.PAIR_COLS), pd.concat(bins, ignore_index=True),
             pd.DataFrame(rows, columns=["segment_id", "n_pairs", "truth_in_scope"]), status)
+
+
+def read_d9(labels: dict) -> pd.DataFrame:
+    d9 = pd.read_csv(D9, dtype=str, keep_default_na=False)
+    if d9.segment_id.duplicated().any() or not set(d9.segment_id) <= set(labels) \
+            or any(labels[r.segment_id] != (r.table_road, r.table_light) for r in d9.itertuples()) \
+            or not set(d9.checker_road) <= ROADS or not set(d9.checker_light) <= LIGHTS:
+        raise SystemExit(f"refused: {D9.name} does not match the label table of the batch")
+    return d9
+
+
+def spot_check(P: pd.DataFrame, EB: pd.DataFrame, rows: pd.DataFrame, labels: dict, d9: pd.DataFrame) -> dict:
+    """D9 (descriptive): the segments whose spot-check labels differ, and the groups with the checker's labels."""
+    diff = d9[(d9.checker_road != d9.table_road) | (d9.checker_light != d9.table_light)]
+    segs = []
+    for r in diff.itertuples():
+        dn, e = dist_numbers(P[P.segment_id == r.segment_id]), ego_numbers(EB[EB.segment_id == r.segment_id])
+        segs.append({"n": int(r.n), "segment_id": r.segment_id, "table": [r.table_road, r.table_light],
+                     "checker": [r.checker_road, r.checker_light], "near_n": dn["near"]["n"],
+                     "near_med_abs_pct": dn["near"]["med_abs_pct"], "mid_n": dn["mid"]["n"],
+                     "mid_med_abs_pct": dn["mid"]["med_abs_pct"], "ego": e})
+    ids = set(diff.segment_id)
+    relabeled = {**labels, **{r.segment_id: (r.checker_road, r.checker_light) for r in d9.itertuples()}}
+    return {"file": D9.relative_to(REPO).as_posix(), "sha256": sha(D9), "sampled": len(d9), "differ": len(diff),
+            "segments": segs, "differing_pooled": {**dist_numbers(P[P.segment_id.isin(ids)]),
+                                                   "ego": ego_numbers(EB[EB.segment_id.isin(ids)])},
+            "groups_checker_labels": group_numbers(P, EB, rows, relabeled)}
 
 
 def judge_state(first_truth: str) -> dict:
@@ -312,6 +343,30 @@ def render(res: dict) -> str:
                      f"60–100 m {rec['far']['med_abs_pct']}%;相對速 {(rec.get('rel_near') or {}).get('mae')} km/h"
                      f"(全猜 0 {(rec.get('rel_near') or {}).get('guess0')});本車速 {rec['ego']['mae']} km/h、覆蓋 "
                      f"{rec['ego']['coverage_pct']}%;找到率 {rec['found_pct']}%")
+    d = res["spot_check"]
+    lines += ["", "## 判定表抽查(D9,描述,不改判定)", "",
+              f"抽查 {d['sampled']} 段,抽查者的標籤和判定表不同 {d['differ']} 段(`{d['file']}`)。"
+              "各條仍照判定表分組判定;下面是不同的段,以及抽查過的段改用抽查者標籤後的各組數字。", "",
+              "| # | 段 | 判定表 | 抽查者 | 30 m 內筆數 | 30 m 內 % | 30–60 m 筆數 | 30–60 m % | 本車速 MAE | 覆蓋 % |",
+              "|---|---|---|---|---|---|---|---|---|---|"]
+    for s in d["segments"]:
+        lines.append(f"| {s['n']} | {s['segment_id']} | {'/'.join(NAMES[x] for x in s['table'])} | "
+                     f"{'/'.join(NAMES[x] for x in s['checker'])} | {s['near_n']} | {s['near_med_abs_pct']} | {s['mid_n']} | "
+                     f"{s['mid_med_abs_pct']} | {s['ego']['mae']} | {s['ego']['coverage_pct']} |")
+    dp = d["differing_pooled"]
+    lines += ["", f"不同的 {d['differ']} 段合併:30 m 內 {dp['near']['med_abs_pct']}%({dp['near']['n']} 筆),"
+              f"30–60 m {dp['mid']['med_abs_pct']}%({dp['mid']['n']} 筆);本車速 {dp['ego']['mae']} km/h、覆蓋 "
+              f"{dp['ego']['coverage_pct']}%。", "",
+              "| 組 | 段數(判定表 → 抽查者) | 30 m 內 % | 30–60 m % | 60–100 m % | 相對速 km/h | 本車速 km/h | 找到率 % |",
+              "|---|---|---|---|---|---|---|---|"]
+    for g, rec in d["groups_checker_labels"].items():
+        t = res["groups"]["v2"][g]
+        lines.append(f"| {TITLES[g]} | {t['segments']} → {rec['segments']} | " + " | ".join(
+            f"{a} → {b}" for a, b in ((t["near"]["med_abs_pct"], rec["near"]["med_abs_pct"]),
+                                       (t["mid"]["med_abs_pct"], rec["mid"]["med_abs_pct"]),
+                                       (t["far"]["med_abs_pct"], rec["far"]["med_abs_pct"]),
+                                       ((t.get("rel_near") or {}).get("mae"), (rec.get("rel_near") or {}).get("mae")),
+                                       (t["ego"]["mae"], rec["ego"]["mae"]), (t["found_pct"], rec["found_pct"]))) + " |")
     return "\n".join(lines) + "\n"
 
 
@@ -369,6 +424,7 @@ def main() -> None:
     counts = {g: sum(pick(*v) for v in labels.values()) for g, pick in GROUPS.items()}
     if odd or counts != COUNTS:
         raise SystemExit(f"refused: labels are not those of the registration ({counts}, unknown labels {odd[:3]})")
+    d9 = read_d9(labels)
     built = {s: F.read_truth(truth / s)[0].get("built_utc", "") for s in ids}
 
     # round_trip: the exact floats the scorer wrote, so truth shifted onto a bin edge falls where it does in the scorer
@@ -448,7 +504,8 @@ def main() -> None:
            "outputs": outputs, "groups": G,
            "items": items({"v2": R["v2"], "v2own": R["v2own"]}, outputs),
            "items_cx582": items({"v2": R["v2_cx582"], "v2own": R["v2own_cx582"]}, outputs),
-           "offset_sensitivity": offsets, "per_drive_primary": per_drive(P, labels)}
+           "offset_sensitivity": offsets, "per_drive_primary": per_drive(P, labels),
+           "spot_check": spot_check(P, EB, rows, labels, d9)}
     a.out.mkdir(parents=True, exist_ok=True)
     (a.out / "judgement.json").write_text(json.dumps(out, indent=1, ensure_ascii=False), encoding="utf-8")
     (a.out / "judgement.md").write_text(render(out), encoding="utf-8")

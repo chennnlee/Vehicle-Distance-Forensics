@@ -1,0 +1,254 @@
+{
+ "labels_file_sha256": "534f6c1f4a846d73ff1e76f43dac1c7d96476f1a0777d75ae58af6bbf127e028",
+ "rule": "D9 spot-check sample of comma2k19_chunk8 labels (written before any frame is extracted).\nRule: cells = (road_class, light) of the label table; within a cell, order segments by\nsha256(\"d9-chunk8-20261020|\" + segment_id) and take the first k. Night and unknown cells are oversampled.",
+ "k": {
+  "ca_highway/day": 12,
+  "ca_highway/night": 6,
+  "ca_local/day": 10,
+  "ca_local/night": 3,
+  "unknown/day": 6,
+  "unknown/night": 3
+ },
+ "segments": [
+  {
+   "segment_id": "99c94dc769b5d96e_2018-08-17--15-51-25_14",
+   "road_class": "ca_highway",
+   "light": "day",
+   "cell_n": 111
+  },
+  {
+   "segment_id": "99c94dc769b5d96e_2018-08-17--15-51-25_15",
+   "road_class": "ca_highway",
+   "light": "day",
+   "cell_n": 111
+  },
+  {
+   "segment_id": "99c94dc769b5d96e_2018-08-17--15-51-25_30",
+   "road_class": "ca_highway",
+   "light": "day",
+   "cell_n": 111
+  },
+  {
+   "segment_id": "99c94dc769b5d96e_2018-09-19--16-09-16_8",
+   "road_class": "ca_local",
+   "light": "day",
+   "cell_n": 43
+  },
+  {
+   "segment_id": "99c94dc769b5d96e_2018-10-06--10-55-28_10",
+   "road_class": "ca_highway",
+   "light": "day",
+   "cell_n": 111
+  },
+  {
+   "segment_id": "99c94dc769b5d96e_2018-08-17--09-18-11_53",
+   "road_class": "ca_local",
+   "light": "day",
+   "cell_n": 43
+  },
+  {
+   "segment_id": "99c94dc769b5d96e_2018-09-25--09-06-17_34",
+   "road_class": "ca_highway",
+   "light": "day",
+   "cell_n": 111
+  },
+  {
+   "segment_id": "99c94dc769b5d96e_2018-08-17--15-51-25_32",
+   "road_class": "ca_highway",
+   "light": "day",
+   "cell_n": 111
+  },
+  {
+   "segment_id": "99c94dc769b5d96e_2018-08-17--15-51-25_12",
+   "road_class": "ca_highway",
+   "light": "day",
+   "cell_n": 111
+  },
+  {
+   "segment_id": "99c94dc769b5d96e_2018-09-12--22-04-39_22",
+   "road_class": "ca_local",
+   "light": "night",
+   "cell_n": 6
+  },
+  {
+   "segment_id": "99c94dc769b5d96e_2018-09-19--16-09-16_27",
+   "road_class": "ca_highway",
+   "light": "day",
+   "cell_n": 111
+  },
+  {
+   "segment_id": "99c94dc769b5d96e_2018-09-19--16-09-16_17",
+   "road_class": "ca_highway",
+   "light": "day",
+   "cell_n": 111
+  },
+  {
+   "segment_id": "99c94dc769b5d96e_2018-09-24--19-08-05_8",
+   "road_class": "ca_local",
+   "light": "night",
+   "cell_n": 6
+  },
+  {
+   "segment_id": "99c94dc769b5d96e_2018-09-13--08-45-04_31",
+   "road_class": "ca_highway",
+   "light": "day",
+   "cell_n": 111
+  },
+  {
+   "segment_id": "99c94dc769b5d96e_2018-09-13--08-45-04_39",
+   "road_class": "ca_highway",
+   "light": "day",
+   "cell_n": 111
+  },
+  {
+   "segment_id": "99c94dc769b5d96e_2018-09-19--14-14-47_2",
+   "road_class": "ca_local",
+   "light": "day",
+   "cell_n": 43
+  },
+  {
+   "segment_id": "99c94dc769b5d96e_2018-08-08--11-11-16_29",
+   "road_class": "ca_highway",
+   "light": "day",
+   "cell_n": 111
+  },
+  {
+   "segment_id": "99c94dc769b5d96e_2018-09-12--22-04-39_19",
+   "road_class": "unknown",
+   "light": "night",
+   "cell_n": 6
+  },
+  {
+   "segment_id": "99c94dc769b5d96e_2018-09-24--19-08-05_10",
+   "road_class": "unknown",
+   "light": "night",
+   "cell_n": 6
+  },
+  {
+   "segment_id": "99c94dc769b5d96e_2018-09-03--15-07-21_6",
+   "road_class": "ca_local",
+   "light": "day",
+   "cell_n": 43
+  },
+  {
+   "segment_id": "99c94dc769b5d96e_2018-08-17--15-51-25_39",
+   "road_class": "unknown",
+   "light": "day",
+   "cell_n": 15
+  },
+  {
+   "segment_id": "99c94dc769b5d96e_2018-09-19--14-05-38_6",
+   "road_class": "unknown",
+   "light": "day",
+   "cell_n": 15
+  },
+  {
+   "segment_id": "99c94dc769b5d96e_2018-08-08--11-11-16_38",
+   "road_class": "ca_local",
+   "light": "day",
+   "cell_n": 43
+  },
+  {
+   "segment_id": "99c94dc769b5d96e_2018-09-19--16-09-16_9",
+   "road_class": "ca_local",
+   "light": "day",
+   "cell_n": 43
+  },
+  {
+   "segment_id": "99c94dc769b5d96e_2018-09-12--22-04-39_14",
+   "road_class": "ca_highway",
+   "light": "night",
+   "cell_n": 27
+  },
+  {
+   "segment_id": "99c94dc769b5d96e_2018-08-08--11-11-16_37",
+   "road_class": "ca_local",
+   "light": "day",
+   "cell_n": 43
+  },
+  {
+   "segment_id": "99c94dc769b5d96e_2018-08-17--19-52-03_6",
+   "road_class": "ca_local",
+   "light": "day",
+   "cell_n": 43
+  },
+  {
+   "segment_id": "99c94dc769b5d96e_2018-08-17--19-52-03_23",
+   "road_class": "ca_highway",
+   "light": "night",
+   "cell_n": 27
+  },
+  {
+   "segment_id": "99c94dc769b5d96e_2018-08-17--15-51-25_38",
+   "road_class": "unknown",
+   "light": "day",
+   "cell_n": 15
+  },
+  {
+   "segment_id": "99c94dc769b5d96e_2018-09-12--22-04-39_18",
+   "road_class": "unknown",
+   "light": "night",
+   "cell_n": 6
+  },
+  {
+   "segment_id": "99c94dc769b5d96e_2018-09-24--19-08-05_17",
+   "road_class": "ca_highway",
+   "light": "night",
+   "cell_n": 27
+  },
+  {
+   "segment_id": "99c94dc769b5d96e_2018-08-17--15-51-25_9",
+   "road_class": "ca_local",
+   "light": "day",
+   "cell_n": 43
+  },
+  {
+   "segment_id": "99c94dc769b5d96e_2018-09-13--20-42-02_5",
+   "road_class": "ca_highway",
+   "light": "night",
+   "cell_n": 27
+  },
+  {
+   "segment_id": "99c94dc769b5d96e_2018-09-19--16-09-16_37",
+   "road_class": "ca_local",
+   "light": "day",
+   "cell_n": 43
+  },
+  {
+   "segment_id": "99c94dc769b5d96e_2018-08-17--19-52-03_16",
+   "road_class": "unknown",
+   "light": "day",
+   "cell_n": 15
+  },
+  {
+   "segment_id": "99c94dc769b5d96e_2018-09-13--20-42-02_8",
+   "road_class": "ca_highway",
+   "light": "night",
+   "cell_n": 27
+  },
+  {
+   "segment_id": "99c94dc769b5d96e_2018-09-12--22-04-39_16",
+   "road_class": "ca_highway",
+   "light": "night",
+   "cell_n": 27
+  },
+  {
+   "segment_id": "99c94dc769b5d96e_2018-09-24--19-08-05_7",
+   "road_class": "ca_local",
+   "light": "night",
+   "cell_n": 6
+  },
+  {
+   "segment_id": "99c94dc769b5d96e_2018-09-19--16-09-16_32",
+   "road_class": "unknown",
+   "light": "day",
+   "cell_n": 15
+  },
+  {
+   "segment_id": "99c94dc769b5d96e_2018-08-17--15-51-25_10",
+   "road_class": "unknown",
+   "light": "day",
+   "cell_n": 15
+  }
+ ]
+}
